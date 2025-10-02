@@ -36,7 +36,7 @@ export default function App() {
     workflows:   "linear-gradient(to bottom, #ff922b, #d6336c)",
   }
 
-  const handleSelect = (id:string) => {
+  const handleSelect = (id: string) => {
     if (id !== selected) {
       setContentVisible(false)
       setTimeout(() => {
@@ -94,7 +94,7 @@ export default function App() {
         overflow:"auto",padding:"1rem"
       }}>
         <header style={{ textAlign:"center", display:"flex" }}>
-          <h1 style={{ fontSize:"3rem",fontWeight:200,margin:0, color:"#FFFFFF" }}>zoe</h1>
+          <h1 style={{ fontSize:"3rem",fontWeight:200,margin:0 }}>zoe</h1>
         </header>
 
         {/* svg nav */}
@@ -260,8 +260,8 @@ function SvgLayer({section}:{section:string}) {
   )
 }
 
-type CardProps = { children:React.ReactNode; urgent?:boolean; overdrive?:boolean }
-function Card({children,urgent,overdrive}:CardProps){
+type CardProps = { children: React.ReactNode; urgent?: boolean; overdrive?: boolean }
+function Card({children, urgent = false, overdrive = false}: CardProps){
   let style:React.CSSProperties={
     background:"rgba(255,255,255,0.1)",borderRadius:"16px",
     padding:"1rem 1.25rem",marginBottom:".75rem",
