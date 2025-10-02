@@ -91,7 +91,7 @@ export default function App() {
         position:"relative",zIndex:2,minHeight:"100vh",width:"100vw",
         display:"flex",flexDirection:"column",alignItems:"center",
         color:"white",fontFamily:"-apple-system, system-ui, sans-serif",
-        overflow:"auto",padding:"1rem"
+        overflow:"auto"
       }}>
         <header style={{ textAlign:"center", display:"flex" }}>
           <h1 style={{ fontSize:"3rem",fontWeight:200,margin:0 }}>zoe</h1>
