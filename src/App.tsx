@@ -1,6 +1,6 @@
-import { useState } from "react"
+import { useState, useMemo, useEffect } from "react"
 import {
-  Sun, TrendingUp, Trophy, Layers, Users, CalendarDays, Flame, Shield
+  Sun, TrendingUp, Trophy, Layers, Users
 } from "lucide-react"
 
 type Section = { id: string; label: string }
@@ -25,37 +25,44 @@ function describeSector(cx:number, cy:number, r:number, startAngle:number, endAn
 
 export default function App() {
   const [selected, setSelected] = useState<string>(sections[0].id)
-  const [prevSelected, setPrevSelected] = useState<string>(sections[0].id)
   const [contentVisible, setContentVisible] = useState<boolean>(true)
+  const [layers, setLayers] = useState<{id:string; bg:string; section:string; ready:boolean}[]>([])
 
-  const gradients: string[] = [
-    "linear-gradient(to bottom, #0f172a, #1e3a8a)",
-    "linear-gradient(to bottom, #f59f00, #f783ac)",
-    "linear-gradient(to bottom, #4dabf7, #228be6)",
-    "linear-gradient(to bottom, #ff922b, #d6336c)",
-    "linear-gradient(to bottom, #0f172a, #1e3a8a)"
-  ]
-  const currentBg = gradients[sections.findIndex(s => s.id === selected)]
-  const prevBg = gradients[sections.findIndex(s => s.id === prevSelected)]
+  const gradients: Record<string,string> = {
+    structure:   "linear-gradient(to bottom, #0f172a, #1e3a8a)",
+    community:   "linear-gradient(to bottom, #0f172a, #1e3a8a)",
+    progression: "linear-gradient(to bottom, #f59f00, #f783ac)",
+    economy:     "linear-gradient(to bottom, #4dabf7, #228be6)",
+    workflows:   "linear-gradient(to bottom, #ff922b, #d6336c)",
+  }
 
   const handleSelect = (id:string) => {
     if (id !== selected) {
       setContentVisible(false)
-      setPrevSelected(selected)
       setTimeout(() => {
         setSelected(id)
         setContentVisible(true)
-        setTimeout(() => { setPrevSelected(id) }, 1200)
       }, 400)
     }
   }
 
-const cx = 100, cy = 100, radius = 80, sliceAngle = 360 / sections.length
+  // push a new layer every time selected changes
+  useEffect(()=>{
+    const newLayer = {id: selected+"-"+Date.now(), bg: gradients[selected], section:selected, ready:false}
+    setLayers(l => [...l, newLayer].slice(-2))
+    // force opacity transition by delaying ready flag
+    requestAnimationFrame(()=>{
+      requestAnimationFrame(()=>{
+        setLayers(l => l.map(layer => layer.id === newLayer.id ? {...layer, ready:true} : layer))
+      })
+    })
+  },[selected])
+
+  const cx = 100, cy = 100, radius = 80, sliceAngle = 360 / sections.length
 
   return (
     <>
       <style>{`
-        @keyframes fadeIn { from{opacity:0;} to{opacity:1;} }
         @keyframes pulse {
           from { box-shadow: 0 0 8px rgba(244,63,94,0.3); }
           to { box-shadow: 0 0 24px rgba(244,63,94,0.9); }
@@ -65,11 +72,19 @@ const cx = 100, cy = 100, radius = 80, sliceAngle = 360 / sections.length
       `}</style>
 
       {/* backgrounds */}
-      <div style={{position:"fixed",top:0,left:0,width:"100%",height:"100%",background:prevBg,zIndex:0}}/>
-      <div key={selected} style={{
-        position:"fixed",top:0,left:0,width:"100%",height:"100%",
-        background:currentBg,animation:"fadeIn 1.2s ease",zIndex:1,pointerEvents:"none"
-      }}/>
+      <div style={{position:"fixed",inset:0,zIndex:0,pointerEvents:"none",overflow:"hidden"}}>
+        {layers.map((layer,i)=>(
+          <div key={layer.id}
+            style={{
+              position:"absolute",inset:0,
+              background: layer.bg,
+              opacity: layer.ready ? 1 : 0,
+              transition:"opacity 1.2s ease"
+            }}>
+            <SvgLayer section={layer.section}/>
+          </div>
+        ))}
+      </div>
 
       {/* main */}
       <div style={{
@@ -78,38 +93,38 @@ const cx = 100, cy = 100, radius = 80, sliceAngle = 360 / sections.length
         color:"white",fontFamily:"-apple-system, system-ui, sans-serif",
         overflow:"auto",padding:"1rem"
       }}>
-        <header style={{ textAlign:"center", display: "flex" }}>
-          <h1 style={{ fontSize:"3rem",fontWeight:200,margin:0 }}>zoe</h1>
+        <header style={{ textAlign:"center", display:"flex" }}>
+          <h1 style={{ fontSize:"3rem",fontWeight:200,margin:0, color:"#FFFFFF" }}>zoe</h1>
         </header>
 
         {/* svg nav */}
         <div>
-  <svg width={cx*2} height={cy*2}>
-    {sections.map((s,i)=>{
-      const start=i*sliceAngle-90,end=start+sliceAngle
-      const path=describeSector(cx,cy,radius,start,end)
-      return (
-        <path key={s.id} d={path}
-          fill={selected===s.id?"rgba(255,255,255,0.3)":"rgba(255,255,255,0.1)"}
-          stroke="white" strokeWidth={1}
-          onClick={()=>handleSelect(s.id)}
-          style={{cursor:"pointer",transition:"fill .3s"}}/>
-      )
-    })}
-    {sections.map((s,i)=>{
-      const angle=(i+.5)*sliceAngle-90, rad=(Math.PI/180)*angle
-      const lx=cx+(radius/1.6)*Math.cos(rad), ly=cy+(radius/1.6)*Math.sin(rad)
-      return (
-        <text key={s.id+"-label"} x={lx} y={ly}
-          textAnchor="middle" dominantBaseline="middle"
-          fill="white" fontSize="8"
-          style={{pointerEvents:"none",fontWeight:selected===s.id?600:400}}>
-          {s.label}
-        </text>
-      )
-    })}
-  </svg>
-</div>
+          <svg width={cx*2} height={cy*2}>
+            {sections.map((s,i)=>{
+              const start=i*sliceAngle-90,end=start+sliceAngle
+              const path=describeSector(cx,cy,radius,start,end)
+              return (
+                <path key={s.id} d={path}
+                  fill={selected===s.id?"rgba(255,255,255,0.3)":"rgba(255,255,255,0.1)"}
+                  stroke="white" strokeWidth={1}
+                  onClick={()=>handleSelect(s.id)}
+                  style={{cursor:"pointer",transition:"fill .3s"}}/>
+              )
+            })}
+            {sections.map((s,i)=>{
+              const angle=(i+.5)*sliceAngle-90, rad=(Math.PI/180)*angle
+              const lx=cx+(radius/1.6)*Math.cos(rad), ly=cy+(radius/1.6)*Math.sin(rad)
+              return (
+                <text key={s.id+"-label"} x={lx} y={ly}
+                  textAnchor="middle" dominantBaseline="middle"
+                  fill="white" fontSize="8"
+                  style={{pointerEvents:"none",fontWeight:selected===s.id?600:400}}>
+                  {s.label}
+                </text>
+              )
+            })}
+          </svg>
+        </div>
 
         {/* content */}
         <div style={{
@@ -124,17 +139,15 @@ const cx = 100, cy = 100, radius = 80, sliceAngle = 360 / sections.length
               <Card><h3>deadlines</h3><p>true hard cutoffs only. missed ⇒ 0 pts + penalty. examples: flights, submissions, appointments.</p></Card>
             </div>
           )}
-
           {selected==="progression" && (
             <div>
               <h2><TrendingUp size={24}/> progression</h2>
               <Card><h3>points & scoring</h3><p>tasks scored small/med/big. full base points whether on-time or late. daily score = base − penalties + streak multipliers. xp accrues for levels + color shifts.</p></Card>
               <Card><h3>streaks</h3><p>perfect streak = max multiplier. consistent streak (e.g. 5/7 days) keeps steady bonus. breaks taper, not erase.</p></Card>
-              <Card overdrive><h3>overdrive</h3><p>after 9/9 tasks, unlimited extras unlock. rising combo multiplier. ui shifts to neon “locked-in mode.”</p></Card>
+              <Card overdrive><h3>overdrive</h3><p>after 9/9 tasks, unlimited extras unlock. rising combo multiplier. ui shifts to neon "locked-in mode."</p></Card>
               <Card><h3>progression loops</h3><p>xp builds levels for cosmetic upgrades. prestige resets at milestones grant aura/title. growth is infinite but non-pay-to-win.</p></Card>
             </div>
           )}
-
           {selected==="economy" && (
             <div>
               <h2><Trophy size={24}/> economy</h2>
@@ -151,7 +164,6 @@ const cx = 100, cy = 100, radius = 80, sliceAngle = 360 / sections.length
               </Card>
             </div>
           )}
-
           {selected==="workflows" && (
             <div>
               <h2><Layers size={24}/> workflows</h2>
@@ -162,7 +174,6 @@ const cx = 100, cy = 100, radius = 80, sliceAngle = 360 / sections.length
               <Card><h3>spillover</h3><p>rules for recurring or missed tasks carrying forward across days. avoids hidden backlog creep.</p></Card>
             </div>
           )}
-
           {selected==="community" && (
             <div>
               <h2><Users size={24}/> community</h2>
@@ -174,6 +185,78 @@ const cx = 100, cy = 100, radius = 80, sliceAngle = 360 / sections.length
         </div>
       </div>
     </>
+  )
+}
+
+function SvgLayer({section}:{section:string}) {
+  // memoize starfields
+  const makeStars = (n:number, maxY=100, minO=0.3, maxO=1) =>
+    Array.from({length:n}).map((_,i)=>({
+      key: i,
+      cx: Math.random()*100,
+      cy: Math.random()*maxY,
+      r: Math.random()*1+0.5,
+      o: Math.random()*(maxO-minO)+minO
+    }))
+
+  const starsStructure = useMemo(()=>makeStars(100),[])
+  const starsCommunity = useMemo(()=>makeStars(120),[])
+  const starsProgression = useMemo(()=>makeStars(30,40,0.2,0.6),[])
+  const starsWorkflows  = useMemo(()=>makeStars(40,60,0.2,0.6),[])
+
+  return (
+    <svg width="100%" height="100%" style={{position:"absolute",inset:0}}>
+      <defs>
+        <linearGradient id="nightSky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#0f172a"/>
+          <stop offset="100%" stopColor="#1e3a8a"/>
+        </linearGradient>
+        <linearGradient id="moonGradient" x1="0" y1="0" x2="0" y2="100%" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#0f172a"/>
+          <stop offset="100%" stopColor="#1e3a8a"/>
+        </linearGradient>
+      </defs>
+
+      {section==="structure" && starsStructure.map(s=>(
+        <circle key={s.key} cx={`${s.cx}%`} cy={`${s.cy}%`} r={s.r} fill="white" opacity={s.o}/>
+      ))}
+
+      {section==="community" && (
+        <>
+          <circle cx="80%" cy="20%" r="40" fill="white"/>
+          <circle cx="85%" cy="20%" r="40" fill="url(#moonGradient)"/>
+          {starsCommunity.map(s=>(
+            <circle key={s.key} cx={`${s.cx}%`} cy={`${s.cy}%`} r={s.r} fill="white" opacity={s.o}/>
+          ))}
+        </>
+      )}
+
+      {section==="progression" && (
+        <>
+          <circle cx="50%" cy="105%" r="90" fill="orange" opacity="0.6"/>
+          {starsProgression.map(s=>(
+            <circle key={s.key} cx={`${s.cx}%`} cy={`${s.cy}%`} r={s.r} fill="white" opacity={s.o}/>
+          ))}
+        </>
+      )}
+
+      {section==="economy" && (
+        <>
+          <path d="M60 100 Q 55 80 75 80 Q 85 60 105 80 Q 125 80 130 95 Q 140 110 120 115 L60 115 Z" fill="white" opacity="0.4"/>
+          <path d="M200 140 Q 190 120 210 120 Q 225 100 245 120 Q 265 120 270 135 Q 280 150 260 155 L200 155 Z" fill="white" opacity="0.4"/>
+        </>
+      )}
+
+      {section==="workflows" && (
+        <>
+          <path d="M100 80 Q 95 65 115 65 Q 125 50 145 65 Q 165 65 170 75 Q 180 90 160 95 L100 95 Z" fill="white" opacity="0.3"/>
+          <path d="M250 130 Q 240 115 260 115 Q 275 100 295 115 Q 315 115 320 125 Q 330 140 310 145 L250 145 Z" fill="white" opacity="0.3"/>
+          {starsWorkflows.map(s=>(
+            <circle key={s.key} cx={`${s.cx}%`} cy={`${s.cy}%`} r={s.r} fill="white" opacity={s.o}/>
+          ))}
+        </>
+      )}
+    </svg>
   )
 }
 
