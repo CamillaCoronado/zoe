@@ -73,7 +73,7 @@ export default function App() {
 
       {/* backgrounds */}
       <div style={{position:"fixed",inset:0,zIndex:0,pointerEvents:"none",overflow:"hidden"}}>
-        {layers.map((layer,i)=>(
+        {layers.map((layer)=>(
           <div key={layer.id}
             style={{
               position:"absolute",inset:0,
