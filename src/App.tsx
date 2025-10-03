@@ -552,7 +552,7 @@ export default function DailyNine() {
 
           {/* content */}
           <div style={{
-            width: '80%',
+            width: '100%',
             maxWidth: '500px',
             opacity: view === 'home' ? (contentVisible ? 1 : 0) : 1,
             transition: 'opacity .4s ease'
