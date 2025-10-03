@@ -341,7 +341,6 @@ export default function DailyNine() {
   };
 
   const cx = 100, cy = 100, radius = 80;
-  const isDark = ['night', 'structure', 'community'].includes(currentSection as string);
 
   return (
     <>
