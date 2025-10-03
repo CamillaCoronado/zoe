@@ -383,7 +383,8 @@ export default function DailyNine() {
           fontFamily: '-apple-system, system-ui, sans-serif',
           overflow: 'auto',
           minHeight: '100vh',
-          padding: '2rem 1rem'
+          paddingLeft: "1rem",
+          paddingRight: "1rem"
         }}>
           {/* header */}
           <header style={{ textAlign: 'left', marginBottom: '2rem' }}>
