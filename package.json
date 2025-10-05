@@ -12,6 +12,7 @@
   "dependencies": {
     "@ncdai/react-wheel-picker": "^1.0.17",
     "@radix-ui/react-scroll-area": "^1.2.10",
+    "firebase": "^12.3.0",
     "framer-motion": "^12.23.22",
     "lucide-react": "^0.544.0",
     "react": "^19.1.1",
