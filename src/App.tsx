@@ -471,7 +471,7 @@ const manualRollover = async () => {
   if (userSnap.exists()) {
     const baseTasks = userSnap.data().tasks || [];
     const cleanedBase = baseTasks.filter(
-      (t: any) => !rolled.some((r: any) => r.title === t.title)
+       (t: { title: string }) => !rolled.some((r: { title: string }) => r.title === t.title)
     );
     await updateDoc(userRef, { tasks: cleanedBase });
   }
