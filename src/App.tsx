@@ -461,7 +461,7 @@ const manualRollover = async () => {
   );
   await updateDoc(todayRef, {
     tasks: cleanedToday,
-    completedCount: cleanedToday.filter((t: any) => t.completed).length,
+    completedCount: cleanedToday.filter((t: { completed: boolean }) => t.completed).length,
     totalTasks: cleanedToday.length
   });
 
