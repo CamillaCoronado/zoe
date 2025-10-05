@@ -457,7 +457,7 @@ const manualRollover = async () => {
 
   // 🧹 remove rolled tasks from TODAY (entry)
   const cleanedToday = (todayData.tasks || []).filter(
-    (t: any) => !rolled.some((r: any) => r.title === t.title)
+      (t: { title: string }) => !rolled.some((r: { title: string }) => r.title === t.title)
   );
   await updateDoc(todayRef, {
     tasks: cleanedToday,
