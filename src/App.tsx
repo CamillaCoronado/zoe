@@ -493,7 +493,8 @@ const planTomorrow = async () => {
   let existingTasks = tomorrowSnap.exists() ? (tomorrowSnap.data().tasks || []) : [];
   
   // only add routine tasks if they don't already exist
-  const existingTitles = existingTasks.map(t => t.title);
+const existingTitles = existingTasks.map((t: { title: string }) => t.title);
+
   
   const morningTasks = morningRoutine
     .filter(t => t.trim() && !existingTitles.includes(t))
