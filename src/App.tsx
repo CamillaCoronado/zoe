@@ -4,6 +4,7 @@ import { signInWithRedirect, signOut, onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
+import { getRedirectResult } from 'firebase/auth';
 
 type TimeSection = 'morning' | 'afternoon' | 'evening' | 'night';
 type HomeSection = 'structure' | 'progression' | 'economy' | 'workflows' | 'community';
@@ -666,6 +667,12 @@ useEffect(() => {
       console.error('signin failed:', err);
     }
   };
+
+  useEffect(() => {
+  getRedirectResult(auth).then((result) => {
+    if (result?.user) setUser(result.user);
+  }).catch(console.error);
+}, []);
 
   const handleSignOut = async () => {
     try {
