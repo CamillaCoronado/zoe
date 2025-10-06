@@ -661,7 +661,7 @@ useEffect(() => {
   // auth handlers
   const handleSignIn = async () => {
     try {
-      await signInWithRedirect()(auth, googleProvider);
+      await signInWithRedirect(auth, googleProvider);
     } catch (err) {
       console.error('signin failed:', err);
     }
