@@ -7,7 +7,7 @@ import { GoogleAuthProvider } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCBC3535BkCE50FniCAQ8yHiEVDZVbGfOY",
-  authDomain: "zoe-ab4cb.firebaseapp.com",
+  authDomain: "zoe-seven.vercel.app",
   projectId: "zoe-ab4cb",
   storageBucket: "zoe-ab4cb.firebasestorage.app",
   messagingSenderId: "1020997980583",
