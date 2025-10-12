@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, Users } from 'lucide-react';
-import { signInWithRedirect, signOut, onAuthStateChanged } from 'firebase/auth';
+import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
-import { getRedirectResult } from 'firebase/auth';
+// import { getRedirectResult } from 'firebase/auth';
 
 type TimeSection = 'morning' | 'afternoon' | 'evening' | 'night';
 type HomeSection = 'structure' | 'progression' | 'economy' | 'workflows' | 'community';
@@ -660,19 +660,20 @@ useEffect(() => {
 }, [view, user, entriesLoaded]);
 
   // auth handlers
-  const handleSignIn = async () => {
-    try {
-      await signInWithRedirect(auth, googleProvider);
-    } catch (err) {
-      console.error('signin failed:', err);
-    }
-  };
+const handleSignIn = async () => {
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    setUser(result.user);
+  } catch (err) {
+    console.error('signin failed:', err);
+  }
+};
 
-  useEffect(() => {
-  getRedirectResult(auth).then((result) => {
-    if (result?.user) setUser(result.user);
-  }).catch(console.error);
-}, []);
+//   useEffect(() => {
+//   getRedirectResult(auth).then((result) => {
+//     if (result?.user) setUser(result.user);
+//   }).catch(console.error);
+// }, []);
 
   const handleSignOut = async () => {
     try {
