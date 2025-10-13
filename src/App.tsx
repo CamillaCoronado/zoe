@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, Users } from 'lucide-react';
 import { signInWithRedirect, signOut, onAuthStateChanged } from 'firebase/auth';
-import { doc, setDoc, getDoc, deleteDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
 import { getRedirectResult } from 'firebase/auth';
@@ -248,8 +248,6 @@ export default function DailyNine() {
     }, 60000);
     return () => clearInterval(interval);
   }, [autoTimeSection, manualOverride, view]);
-
-const routinesRef = useRef({ morning: morningRoutine, night: nightRoutine });
 
 const typingRef = useRef(false);
 
