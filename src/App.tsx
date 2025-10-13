@@ -249,24 +249,12 @@ export default function DailyNine() {
     return () => clearInterval(interval);
   }, [autoTimeSection, manualOverride, view]);
 
-const routinesRef = useRef({ morning: morningRoutine, night: nightRoutine });
+const typingRef = useRef(false);
 
 useEffect(() => {
-  if (!user || loading) return;
-  
-  // only run if routines actually changed (not just re-renders)
-  const morningChanged = JSON.stringify(routinesRef.current.morning) !== JSON.stringify(morningRoutine);
-  const nightChanged = JSON.stringify(routinesRef.current.night) !== JSON.stringify(nightRoutine);
-  
-  if (!morningChanged && !nightChanged) return;
-  
-  routinesRef.current = { morning: morningRoutine, night: nightRoutine };
-  
-  const timeoutId = setTimeout(() => {
-    ensureRoutinesExist();
-  }, 1000); // wait 1s after typing stops
-  
-  return () => clearTimeout(timeoutId);
+  if (!user || loading || typingRef.current) return;
+  const id = setTimeout(() => ensureRoutinesExist(), 3000);
+  return () => clearTimeout(id);
 }, [user, loading, morningRoutine, nightRoutine]);
 
 useEffect(() => {
@@ -408,79 +396,57 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
 
 const manualRollover = async () => {
   if (!user) return;
-  
-  const today = new Date().toISOString().split('T')[0];
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
-  
-  const todayRef = doc(db, 'users', user.uid, 'entries', today);
-  const todaySnap = await getDoc(todayRef);
-  if (!todaySnap.exists()) {
-    alert('no tasks found for today');
-    return;
-  }
-  
-  const todayData = todaySnap.data();
-  const incomplete = (todayData.tasks || []).filter((t: any) => !t.completed);
-  if (!incomplete.length) {
-    alert('no incomplete tasks to roll over');
-    return;
-  }
+  const today = new Date().toISOString().split("T")[0];
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
 
-  const allMorning = morningRoutine || [];
-  const allNight = nightRoutine || [];
+  const todayRef = doc(db, "users", user.uid, "entries", today);
+  const snap = await getDoc(todayRef);
+  if (!snap.exists()) return alert("no tasks found for today");
 
-  const rolled = incomplete
-    .filter((t: any) => !allMorning.includes(t.title) && !allNight.includes(t.title))
-    .map((t: any) => ({
-      ...t,
-      id: Date.now().toString() + Math.random().toString(36).slice(2),
-      completed: false,
-      routineType: null
-    }));
+  const data = snap.data();
+  const incomplete = (data.tasks || []).filter((t: any) => !t.completed);
+  const rolled = incomplete.filter(
+    (t: any) => !["morning", "night"].includes(t.routineType)
+  ).map((t: any) => ({
+    ...t,
+    id: crypto.randomUUID(),
+    completed: false,
+    routineType: null
+  }));
+  if (!rolled.length) return alert("nothing to roll");
 
-  if (!rolled.length) {
-    alert('all incomplete tasks are routines (not rolling over)');
-    return;
-  }
+  const tomorrowRef = doc(db, "users", user.uid, "entries", tomorrow);
+  const tomorrowData = (await getDoc(tomorrowRef)).data() || {};
+  const updatedTomorrow = [...(tomorrowData.tasks || []), ...rolled];
 
-  const tomorrowRef = doc(db, 'users', user.uid, 'entries', tomorrow);
-  const tomorrowSnap = await getDoc(tomorrowRef);
-  const existingTomorrow = tomorrowSnap.exists() ? (tomorrowSnap.data().tasks || []) : [];
-  const updatedTomorrow = [...existingTomorrow, ...rolled];
-
-  // ✅ write rolled tasks to tomorrow’s entry
-  await setDoc(tomorrowRef, {
-    tasks: updatedTomorrow,
-    completedCount: updatedTomorrow.filter(t => t.completed).length,
-    totalTasks: updatedTomorrow.length,
-    timestamp: serverTimestamp()
-  }, { merge: true });
-
-  // 🧹 remove rolled tasks from TODAY (entry)
-  const cleanedToday = (todayData.tasks || []).filter(
-      (t: { title: string }) => !rolled.some((r: { title: string }) => r.title === t.title)
+  await setDoc(
+    tomorrowRef,
+    {
+      tasks: updatedTomorrow,
+      completedCount: updatedTomorrow.filter(t => t.completed).length,
+      totalTasks: updatedTomorrow.length,
+      timestamp: serverTimestamp()
+    },
+    { merge: true }
   );
+
+  const cleaned = (data.tasks || []).filter(
+    (t: any) => !rolled.some((r: any) => r.title === t.title)
+  );
+
   await updateDoc(todayRef, {
-    tasks: cleanedToday,
-    completedCount: cleanedToday.filter((t: { completed: boolean }) => t.completed).length,
-    totalTasks: cleanedToday.length
+    tasks: cleaned,
+    completedCount: cleaned.filter((t: any) => t.completed).length,
+    totalTasks: cleaned.length
   });
 
-  // 🧹 also clean the base user doc so it stays in sync
-  const userRef = doc(db, 'users', user.uid);
-  const userSnap = await getDoc(userRef);
-  if (userSnap.exists()) {
-    const baseTasks = userSnap.data().tasks || [];
-    const cleanedBase = baseTasks.filter(
-       (t: { title: string }) => !rolled.some((r: { title: string }) => r.title === t.title)
-    );
-    await updateDoc(userRef, { tasks: cleanedBase });
-  }
+  // sync base doc
+  await updateDoc(doc(db, "users", user.uid), { tasks: cleaned });
 
-  setTasks(cleanedToday);
-
-  alert(`rolled ${rolled.length} task${rolled.length === 1 ? '' : 's'} to tomorrow`);
+  setTasks(cleaned);
+  alert(`rolled ${rolled.length} task${rolled.length > 1 ? "s" : ""}`);
 };
+
 
 const planTomorrow = async () => {
   if (!user) return;
@@ -599,10 +565,15 @@ const ensureRoutinesExist = async () => {
   if (newTasks.length > 0) {
     const updated = [...tasks, ...newTasks];
     setTasks(updated);
-    await updateDoc(doc(db, 'users', user.uid), {
+    const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
+    await setDoc(entryRef, {
       tasks: updated,
-      updatedAt: serverTimestamp()
-    });
+      completedCount: updated.filter(t => t.completed).length,
+      totalTasks: updated.length,
+      morningRoutine,
+      nightRoutine,
+      timestamp: serverTimestamp()
+    }, { merge: true });
   }
 };
 
@@ -760,32 +731,28 @@ const addRoutineTasks = (routineType: 'morning' | 'night') => {
 
 useEffect(() => {
   if (!user) return;
-
-  const currentDate = new Date().toISOString().split('T')[0];
-  let lastDate = currentDate;
-
+  let lastDate = new Date().toISOString().split("T")[0];
   const interval = setInterval(async () => {
-    const newDate = new Date().toISOString().split('T')[0];
-    if (newDate !== lastDate) {
-      // date changed → finalize yesterday
-      const yesterday = lastDate;
-      const entryRef = doc(db, 'users', user.uid, 'entries', yesterday);
-      try {
-        await setDoc(entryRef, {
-          tasks,
-          completedCount,
-          totalTasks: tasks.length,
+    const currentDate = new Date().toISOString().split("T")[0];
+    if (currentDate !== lastDate) {
+      const yesterdayRef = doc(db, "users", user.uid, "entries", lastDate);
+      const snapTasks = tasks; // use closure to keep up to date
+      await setDoc(
+        yesterdayRef,
+        {
+          tasks: snapTasks,
+          completedCount: snapTasks.filter(t => t.completed).length,
+          totalTasks: snapTasks.length,
           timestamp: serverTimestamp()
-        }, { merge: true });
-      } catch (err) {
-        console.error('failed to finalize yesterday:', err);
-      }
-      lastDate = newDate;
+        },
+        { merge: true }
+      );
+      lastDate = currentDate;
     }
-  }, 60000); // check once per minute
-
+  }, 60000);
   return () => clearInterval(interval);
-}, [user, tasks, completedCount]);
+}, [user, tasks]);
+
 
   const addTask = () => {
     if (!newTask.trim()) return;
@@ -1619,9 +1586,14 @@ useEffect(() => {
                         type="text"
                         value={item}
                         onChange={e => {
+                          typingRef.current = true;
                           const updated = [...morningRoutine];
                           updated[i] = e.target.value;
                           setMorningRoutine(updated);
+                          clearTimeout((window as any)._routineReset);
+                          (window as any)._routineReset = setTimeout(() => {
+                            typingRef.current = false;
+                          }, 2000);
                         }}
                         style={{
                           flex: 1,
@@ -1687,9 +1659,14 @@ useEffect(() => {
                         type="text"
                         value={item}
                         onChange={e => {
+                          typingRef.current = true;
                           const updated = [...nightRoutine];
                           updated[i] = e.target.value;
                           setNightRoutine(updated);
+                          clearTimeout((window as any)._routineReset);
+                          (window as any)._routineReset = setTimeout(() => {
+                            typingRef.current = false;
+                          }, 2000);
                         }}
                         style={{
                           flex: 1,
