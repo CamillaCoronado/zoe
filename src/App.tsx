@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, Users } from 'lucide-react';
-import { signInWithRedirect, signOut, onAuthStateChanged } from 'firebase/auth';
+import { signInWithRedirect, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
@@ -257,6 +257,24 @@ useEffect(() => {
   return () => clearTimeout(id);
 }, [user, loading, morningRoutine, nightRoutine]);
 
+// save routine changes to firestore
+useEffect(() => {
+  if (!user || loading) return;
+  
+  const saveTimer = setTimeout(async () => {
+    try {
+      await updateDoc(doc(db, 'users', user.uid), {
+        morningRoutine,
+        nightRoutine
+      });
+    } catch (err) {
+      console.error('failed to save routines:', err);
+    }
+  }, 1000);
+  
+  return () => clearTimeout(saveTimer);
+}, [morningRoutine, nightRoutine, user, loading]);
+
 useEffect(() => {
   const initialSection =
     user && view === 'today'
@@ -285,25 +303,49 @@ useEffect(() => {
 }, [user, view]);
 
 useEffect(() => {
-  const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-    setLoading(true);
+  let mounted = true;
 
-    if (firebaseUser) {
-      setUser(firebaseUser);
-      loadUserData(firebaseUser.uid)
-        .then(() => {
-          setView('today');
-        })
-        .finally(() => setLoading(false));
-    } else {
-      setUser(null);
-      setTasks([]);
-      setView('home');
-      setLoading(false);
+  const initAuth = async () => {
+    try {
+      // handle redirect result first
+      const result = await getRedirectResult(auth);
+      if (result?.user && mounted) {
+        console.log('redirect success:', result.user.email);
+      }
+    } catch (error) {
+      console.error('redirect error:', error);
     }
-  });
 
-  return () => unsubscribe();
+    // then set up the auth state listener
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (!mounted) return;
+      
+      setLoading(true);
+
+      if (firebaseUser) {
+        setUser(firebaseUser);
+        loadUserData(firebaseUser.uid)
+          .then(() => {
+            setView('today');
+          })
+          .finally(() => setLoading(false));
+      } else {
+        setUser(null);
+        setTasks([]);
+        setView('home');
+        setLoading(false);
+      }
+    });
+
+    return unsubscribe;
+  };
+
+  const cleanupPromise = initAuth();
+
+  return () => {
+    mounted = false;
+    cleanupPromise.then(unsub => unsub?.());
+  };
 }, []);
 
 
@@ -331,7 +373,7 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
 
   // only check rollover if loading today
   if (targetDate === new Date().toISOString().split('T')[0]) {
-    // await checkRollover(uid);
+    await checkRollover(uid);
   }
 
   if (userDoc.exists()) {
@@ -343,108 +385,141 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
   }
 };
 
-// const checkRollover = async (uid: string) => {
-//   const today = new Date().toISOString().split('T')[0];
-//   const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+const checkRollover = async (uid: string) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
 
-//   const todayRef = doc(db, 'users', uid, 'entries', today);
-//   const todaySnap = await getDoc(todayRef);
-//   if (todaySnap.exists()) return; // skip if today already started
+    const todayRef = doc(db, 'users', uid, 'entries', today);
+    const todaySnap = await getDoc(todayRef);
+    
+    // skip if today already has tasks (means we already did rollover or user added tasks)
+    if (todaySnap.exists() && (todaySnap.data().tasks || []).length > 0) return;
 
-//   const yesterdayRef = doc(db, 'users', uid, 'entries', yesterday);
-//   const ySnap = await getDoc(yesterdayRef);
-//   if (!ySnap.exists() || ySnap.data().rolloverApplied) return;
+    const yesterdayRef = doc(db, 'users', uid, 'entries', yesterday);
+    const ySnap = await getDoc(yesterdayRef);
+    
+    // skip if no yesterday data or already rolled
+    if (!ySnap.exists() || ySnap.data().rolloverApplied) return;
 
-//   const yData = ySnap.data();
-//   const incomplete = (yData.tasks || []).filter((t: any) => !t.completed);
-//   if (!incomplete.length) return;
+    const yData = ySnap.data();
+    const allTasks = yData.tasks || [];
+    
+    // get incomplete non-routine tasks
+    const incomplete = allTasks.filter((t: any) => !t.completed);
+    const rolled = incomplete
+      .filter((t: any) => !t.routineType || t.routineType === null)
+      .map((t: any) => ({
+        ...t,
+        id: Date.now().toString() + Math.random().toString(36).slice(2, 11),
+        routineType: null,
+        completed: false
+      }));
 
-//   const allMorning = yData.morningRoutine || [];
-//   const allNight = yData.nightRoutine || [];
+    // mark as rolled even if nothing to roll
+    await updateDoc(yesterdayRef, { rolloverApplied: true });
 
-//   const rolled = incomplete
-//     .filter((t: any) => !allMorning.includes(t.title) && !allNight.includes(t.title))
-//     .map((t: any) => ({
-//       ...t,
-//       id: Date.now().toString() + Math.random().toString(36).slice(2),
-//       routineType: null,
-//       completed: false
-//     }));
+    if (!rolled.length) return;
 
-//   if (!rolled.length) {
-//     await updateDoc(yesterdayRef, { rolloverApplied: true });
-//     return;
-//   }
+    // write rolled tasks to TODAY's entry (not user base doc)
+    const existingToday = todaySnap.exists() ? (todaySnap.data().tasks || []) : [];
+    const todayTasks = [...existingToday, ...rolled];
 
-//   const userRef = doc(db, 'users', uid);
-//   const userSnap = await getDoc(userRef);
-//   const baseTasks = userSnap.exists() ? (userSnap.data().tasks || []) : [];
-//   const updated = [...baseTasks, ...rolled];
+    await setDoc(
+      todayRef,
+      {
+        tasks: todayTasks,
+        completedCount: todayTasks.filter((t: any) => t.completed).length,
+        totalTasks: todayTasks.length,
+        timestamp: serverTimestamp()
+      },
+      { merge: true }
+    );
 
-//   // ✅ write rolled tasks to user
-//   await updateDoc(userRef, { tasks: updated });
-//   // ✅ mark yesterday as rolled
-//   await updateDoc(yesterdayRef, { rolloverApplied: true });
+    // also update user base doc for backwards compat
+    await updateDoc(doc(db, 'users', uid), { tasks: todayTasks });
 
-//   // 🧹 remove rolled tasks from yesterday’s entry
-//   const cleaned = (yData.tasks || []).filter(
-//     (t: any) => !rolled.some((r: any) => r.title === t.title)
-//   );
-//   await updateDoc(yesterdayRef, { tasks: cleaned });
-// };
+    console.log(`auto-rolled ${rolled.length} tasks from yesterday`);
+  } catch (error) {
+    console.error('auto rollover failed:', error);
+  }
+};
 
 
 const manualRollover = async () => {
   if (!user) return;
-  const today = new Date().toISOString().split("T")[0];
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+  
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
 
-  const todayRef = doc(db, "users", user.uid, "entries", today);
-  const snap = await getDoc(todayRef);
-  if (!snap.exists()) return alert("no tasks found for today");
+    const todayRef = doc(db, "users", user.uid, "entries", today);
+    const snap = await getDoc(todayRef);
+    
+    if (!snap.exists()) {
+      alert("no tasks found for today");
+      return;
+    }
 
-  const data = snap.data();
-  const incomplete = (data.tasks || []).filter((t: any) => !t.completed);
-  const rolled = incomplete.filter(
-    (t: any) => !["morning", "night"].includes(t.routineType)
-  ).map((t: any) => ({
-    ...t,
-    id: crypto.randomUUID(),
-    completed: false,
-    routineType: null
-  }));
-  if (!rolled.length) return alert("nothing to roll");
+    const data = snap.data();
+    const allTasks = data.tasks || [];
+    
+    // get incomplete non-routine tasks
+    const incomplete = allTasks.filter((t: any) => !t.completed);
+    const rolled = incomplete
+      .filter((t: any) => !t.routineType || t.routineType === null)
+      .map((t: any) => ({
+        ...t,
+        id: Date.now().toString() + Math.random().toString(36).slice(2, 11),
+        completed: false,
+        routineType: null
+      }));
+    
+    if (!rolled.length) {
+      alert("nothing to roll - all incomplete tasks are routine tasks");
+      return;
+    }
 
-  const tomorrowRef = doc(db, "users", user.uid, "entries", tomorrow);
-  const tomorrowData = (await getDoc(tomorrowRef)).data() || {};
-  const updatedTomorrow = [...(tomorrowData.tasks || []), ...rolled];
+    // get tomorrow's existing tasks
+    const tomorrowRef = doc(db, "users", user.uid, "entries", tomorrow);
+    const tomorrowSnap = await getDoc(tomorrowRef);
+    const tomorrowData = tomorrowSnap.exists() ? tomorrowSnap.data() : {};
+    const existingTomorrowTasks = tomorrowData.tasks || [];
+    
+    // merge rolled tasks into tomorrow
+    const updatedTomorrow = [...existingTomorrowTasks, ...rolled];
 
-  await setDoc(
-    tomorrowRef,
-    {
-      tasks: updatedTomorrow,
-      completedCount: updatedTomorrow.filter(t => t.completed).length,
-      totalTasks: updatedTomorrow.length,
-      timestamp: serverTimestamp()
-    },
-    { merge: true }
-  );
+    await setDoc(
+      tomorrowRef,
+      {
+        tasks: updatedTomorrow,
+        completedCount: updatedTomorrow.filter((t: any) => t.completed).length,
+        totalTasks: updatedTomorrow.length,
+        timestamp: serverTimestamp()
+      },
+      { merge: true }
+    );
 
-  const cleaned = (data.tasks || []).filter(
-    (t: any) => !rolled.some((r: any) => r.title === t.title)
-  );
+    // remove rolled tasks from today
+    const cleaned = allTasks.filter(
+      (t: any) => !rolled.some((r: any) => r.title === t.title && !t.completed)
+    );
 
-  await updateDoc(todayRef, {
-    tasks: cleaned,
-    completedCount: cleaned.filter((t: any) => t.completed).length,
-    totalTasks: cleaned.length
-  });
+    await updateDoc(todayRef, {
+      tasks: cleaned,
+      completedCount: cleaned.filter((t: any) => t.completed).length,
+      totalTasks: cleaned.length
+    });
 
-  // sync base doc
-  await updateDoc(doc(db, "users", user.uid), { tasks: cleaned });
+    // sync to base user doc
+    await updateDoc(doc(db, "users", user.uid), { tasks: cleaned });
 
-  setTasks(cleaned);
-  alert(`rolled ${rolled.length} task${rolled.length > 1 ? "s" : ""}`);
+    setTasks(cleaned);
+    alert(`rolled ${rolled.length} task${rolled.length > 1 ? "s" : ""} to tomorrow`);
+  } catch (error) {
+    console.error('rollover failed:', error);
+    alert('rollover failed - check console');
+  }
 };
 
 
@@ -633,17 +708,20 @@ useEffect(() => {
   // auth handlers
 const handleSignIn = async () => {
   try {
-    await signInWithRedirect(auth, googleProvider);
+    // use popup on localhost bc redirect doesn't work there (firebase issue)
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    
+    if (isLocalhost) {
+      await signInWithPopup(auth, googleProvider);
+    } else {
+      await signInWithRedirect(auth, googleProvider);
+    }
   } catch (err) {
     console.error('signin failed:', err);
   }
 };
 
-  useEffect(() => {
-  getRedirectResult(auth).then((result) => {
-    if (result?.user) setUser(result.user);
-  }).catch(console.error);
-}, []);
+
 
   const handleSignOut = async () => {
     try {
@@ -1606,9 +1684,16 @@ useEffect(() => {
                         }}
                       />
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           const updated = morningRoutine.filter((_, idx) => idx !== i);
                           setMorningRoutine(updated);
+                          
+                          // save to firestore immediately
+                          if (user) {
+                            await updateDoc(doc(db, 'users', user.uid), {
+                              morningRoutine: updated
+                            });
+                          }
                         }}
                         style={{
                           background: 'none',
@@ -1679,9 +1764,16 @@ useEffect(() => {
                         }}
                       />
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           const updated = nightRoutine.filter((_, idx) => idx !== i);
                           setNightRoutine(updated);
+                          
+                          // save to firestore immediately
+                          if (user) {
+                            await updateDoc(doc(db, 'users', user.uid), {
+                              nightRoutine: updated
+                            });
+                          }
                         }}
                         style={{
                           background: 'none',
