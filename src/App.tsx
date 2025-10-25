@@ -348,6 +348,7 @@ export default function DailyNine() {
 
 const typingRef = useRef(false);
 
+// removed the delayed ensureRoutinesExist - now called directly during load
 
 // save routine changes to firestore
 useEffect(() => {
@@ -816,6 +817,44 @@ const saveDailySnapshot = async () => {
   }
 };
 
+const ensureRoutinesExist = async () => {
+  if (!user) return;
+
+  const existingTitles = tasks.map(t => t.title);
+  
+  const missingMorning = morningRoutine.filter(title => !existingTitles.includes(title));
+  const missingNight = nightRoutine.filter(title => !existingTitles.includes(title));
+
+  const newTasks = [
+    ...missingMorning.map(title => ({
+      id: Date.now().toString() + Math.random().toString(36).slice(2),
+      title,
+      completed: false,
+      routineType: 'morning'
+    })),
+    ...missingNight.map(title => ({
+      id: Date.now().toString() + Math.random().toString(36).slice(2),
+      title,
+      completed: false,
+      routineType: 'night'
+    }))
+  ];
+
+  if (newTasks.length > 0) {
+    const updated = [...tasks, ...newTasks];
+    setTasks(updated);
+    const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
+    await setDoc(entryRef, {
+      tasks: updated,
+      completedCount: updated.filter(t => t.completed).length,
+      totalTasks: updated.length,
+      morningRoutine,
+      nightRoutine,
+      timestamp: serverTimestamp()
+    }, { merge: true });
+  }
+};
+
 useEffect(() => {
   if (!user || loading) return;
   
@@ -896,8 +935,8 @@ const handleSignIn = async () => {
     }
   };
 
-  // follower functions
-  const sendFollowRequest = async (targetEmail: string) => {
+  // friend functions
+  const sendFriendRequest = async (targetEmail: string) => {
     if (!user || !targetEmail.trim()) return;
     
     try {
@@ -919,7 +958,7 @@ const handleSignIn = async () => {
       }
       
       if (targetUid === user.uid) {
-        alert('cannot follow yourself');
+        alert('cannot add yourself as friend');
         return;
       }
       
@@ -937,10 +976,10 @@ const handleSignIn = async () => {
         pendingRequests: [...currentPending, user.uid]
       });
       
-      alert('follow request sent');
+      alert('friend request sent');
       setSearchEmail('');
     } catch (err) {
-      console.error('follow request failed:', err);
+      console.error('friend request failed:', err);
       alert('failed to send request');
     }
   };
@@ -1705,23 +1744,6 @@ useEffect(() => {
             rollover
           </button>
           <button
-            onClick={async () => {
-              if (!user) return;
-              await checkRollover(user.uid);
-              alert('test rollover complete - check console');
-            }}
-            style={{
-              padding: '0.5rem 0.75rem',
-              background: 'rgba(255,165,0,0.1)',
-              border: '1px solid rgba(255,165,0,0.3)',
-              borderRadius: '6px',
-              fontSize: '0.75rem',
-              cursor: 'pointer',
-              color: '#ff8800'
-            }}>
-            test auto rollover
-          </button>
-          <button
             onClick={planTomorrow}
             style={{
               padding: '0.5rem 0.75rem',
@@ -2162,7 +2184,7 @@ useEffect(() => {
                     }}
                   />
                   <button
-                    onClick={() => sendFollowRequest(searchEmail)}
+                    onClick={() => sendFriendRequest(searchEmail)}
                     style={{
                       width: '100%',
                       padding: '0.5rem',
