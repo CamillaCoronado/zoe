@@ -326,6 +326,10 @@ export default function DailyNine() {
   const [viewingFollower, setViewingFollower] = useState<string | null>(null);
   const [followerTasks, setFollowerTasks] = useState<any[]>([]);
 
+  // avoid unused var warnings
+  void following;
+  void viewingFollower;
+
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
   const [editingDate, setEditingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
@@ -933,7 +937,7 @@ const handleSignIn = async () => {
       const theirSnap = await getDoc(theirRef);
       const theirFollowing = theirSnap.exists() ? (theirSnap.data().following || []) : [];
       await updateDoc(theirRef, {
-        following: theirFollowing.filter(uid => uid !== user.uid)
+        following: theirFollowing.filter((uid: string) => uid !== user.uid)
       });
       
       setFollowers(followers.filter(uid => uid !== followerUid));
@@ -1644,6 +1648,23 @@ useEffect(() => {
               color: '#0f172a'
             }}>
             rollover
+          </button>
+          <button
+            onClick={async () => {
+              if (!user) return;
+              await checkRollover(user.uid);
+              alert('test rollover complete - check console');
+            }}
+            style={{
+              padding: '0.5rem 0.75rem',
+              background: 'rgba(255,165,0,0.1)',
+              border: '1px solid rgba(255,165,0,0.3)',
+              borderRadius: '6px',
+              fontSize: '0.75rem',
+              cursor: 'pointer',
+              color: '#ff8800'
+            }}>
+            test auto rollover
           </button>
           <button
             onClick={planTomorrow}
