@@ -249,7 +249,7 @@ function PendingRequest({ uid, onAccept, getEmail }: { uid: string; onAccept: (u
   );
 }
 
-function FollowerItem({ uid, onRemove, onView, getEmail }: { uid: string; onRemove: (uid: string) => void; onView: (uid: string) => void; getEmail: (uid: string) => Promise<string> }) {
+function FriendItem({ uid, onRemove, onView, getEmail }: { uid: string; onRemove: (uid: string) => void; onView: (uid: string) => void; getEmail: (uid: string) => Promise<string> }) {
   const [email, setEmail] = useState('loading...');
   
   useEffect(() => {
@@ -301,7 +301,7 @@ function FollowerItem({ uid, onRemove, onView, getEmail }: { uid: string; onRemo
 }
 
 export default function DailyNine() {
-  const [view, setView] = useState<'home' | 'today' | 'history' | 'settings' | 'follower'>('home');
+  const [view, setView] = useState<'home' | 'today' | 'history' | 'settings' | 'friend'>('home');
   const [homeSection, setHomeSection] = useState<HomeSection>('structure');
   const [autoTimeSection, setAutoTimeSection] = useState<TimeSection>(getTimeSection());
   const [manualOverride, setManualOverride] = useState<TimeSection | null>(null);
@@ -318,17 +318,15 @@ export default function DailyNine() {
   const [entries, setEntries] = useState<{date: string; completedCount: number; totalTasks: number;}[]>([]);
   const [entriesLoaded, setEntriesLoaded] = useState(false);
 
-  // follower stuff
-  const [followers, setFollowers] = useState<string[]>([]);
-  const [following, setFollowing] = useState<string[]>([]);
+  // friend stuff
+  const [friends, setFriends] = useState<string[]>([]);
   const [pendingRequests, setPendingRequests] = useState<string[]>([]);
   const [searchEmail, setSearchEmail] = useState('');
-  const [viewingFollower, setViewingFollower] = useState<string | null>(null);
-  const [followerTasks, setFollowerTasks] = useState<any[]>([]);
+  const [viewingFriend, setViewingFriend] = useState<string | null>(null);
+  const [friendTasks, setFriendTasks] = useState<any[]>([]);
 
-  // avoid unused var warnings
-  void following;
-  void viewingFollower;
+  // viewingFriend only used internally
+  void viewingFriend;
 
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
   const [editingDate, setEditingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
@@ -350,11 +348,7 @@ export default function DailyNine() {
 
 const typingRef = useRef(false);
 
-useEffect(() => {
-  if (!user || loading || typingRef.current) return;
-  const id = setTimeout(() => ensureRoutinesExist(), 3000);
-  return () => clearTimeout(id);
-}, [user, loading, morningRoutine, nightRoutine]);
+// removed the delayed ensureRoutinesExist - now called directly during load
 
 // save routine changes to firestore
 useEffect(() => {
@@ -423,6 +417,7 @@ useEffect(() => {
 
       if (firebaseUser) {
         setUser(firebaseUser);
+        setEditingDate(new Date().toISOString().split('T')[0]); // reset to actual today
         loadUserData(firebaseUser.uid)
           .then(() => {
             setView('today');
@@ -458,8 +453,7 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
     await setDoc(userDocRef, {
       email: user.email,
       tasks: [],
-      followers: [],
-      following: [],
+      friends: [],
       pendingRequests: [],
       createdAt: serverTimestamp()
     });
@@ -489,6 +483,16 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
   // only check rollover if loading today
   if (targetDate === new Date().toISOString().split('T')[0]) {
     await checkRollover(uid);
+    
+    // reload today's tasks after rollover
+    const entryRefAfterRollover = doc(db, 'users', uid, 'entries', targetDate);
+    const entryDocAfterRollover = await getDoc(entryRefAfterRollover);
+    if (entryDocAfterRollover.exists()) {
+      const rolledTasks = entryDocAfterRollover.data().tasks || [];
+      if (rolledTasks.length > 0) {
+        setTasks(rolledTasks);
+      }
+    }
   }
 
   if (userDoc.exists()) {
@@ -497,28 +501,105 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
     setManualOverride(data.manualOverride || null);
     setMorningRoutine(data.morningRoutine || []);
     setNightRoutine(data.nightRoutine || []);
+    
+    // add routine tasks immediately after loading if viewing today
+    if (targetDate === new Date().toISOString().split('T')[0]) {
+      // need to wait for state to settle, then add routines
+      const morning = data.morningRoutine || [];
+      const night = data.nightRoutine || [];
+      
+      if (morning.length > 0 || night.length > 0) {
+        setTimeout(async () => {
+          const currentTasks = await getDoc(entryRef);
+          const existing = currentTasks.exists() ? (currentTasks.data().tasks || []) : [];
+          const existingTitles = existing.map((t: any) => t.title);
+          
+          const missingMorning = morning.filter((title: string) => !existingTitles.includes(title));
+          const missingNight = night.filter((title: string) => !existingTitles.includes(title));
+          
+          const newTasks = [
+            ...missingMorning.map((title: string) => ({
+              id: Date.now().toString() + Math.random().toString(36).slice(2),
+              title,
+              completed: false,
+              routineType: 'morning'
+            })),
+            ...missingNight.map((title: string) => ({
+              id: Date.now().toString() + Math.random().toString(36).slice(2),
+              title,
+              completed: false,
+              routineType: 'night'
+            }))
+          ];
+          
+          if (newTasks.length > 0) {
+            const updated = [...existing, ...newTasks];
+            setTasks(updated);
+            await setDoc(entryRef, {
+              tasks: updated,
+              completedCount: updated.filter((t: any) => t.completed).length,
+              totalTasks: updated.length,
+              morningRoutine: morning,
+              nightRoutine: night,
+              timestamp: serverTimestamp()
+            }, { merge: true });
+          }
+        }, 0);
+      }
+    }
   }
 };
 
 const checkRollover = async (uid: string) => {
   try {
     const today = new Date().toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    
+    console.log('[ROLLOVER] checking rollover', { today, uid });
 
     const todayRef = doc(db, 'users', uid, 'entries', today);
     const todaySnap = await getDoc(todayRef);
     
-    // skip if today already has tasks (means we already did rollover or user added tasks)
-    if (todaySnap.exists() && (todaySnap.data().tasks || []).length > 0) return;
-
-    const yesterdayRef = doc(db, 'users', uid, 'entries', yesterday);
-    const ySnap = await getDoc(yesterdayRef);
+    console.log('[ROLLOVER] today exists?', todaySnap.exists(), 'tasks:', todaySnap.exists() ? (todaySnap.data().tasks || []).length : 0);
     
-    // skip if no yesterday data or already rolled
-    if (!ySnap.exists() || ySnap.data().rolloverApplied) return;
+    // skip if today already has tasks (means we already did rollover or user added tasks)
+    if (todaySnap.exists() && (todaySnap.data().tasks || []).length > 0) {
+      console.log('[ROLLOVER] skipping - today already has tasks');
+      return;
+    }
 
-    const yData = ySnap.data();
-    const allTasks = yData.tasks || [];
+    // find the LAST entry (most recent before today)
+    const entriesRef = collection(db, 'users', uid, 'entries');
+    const q = query(entriesRef, orderBy('timestamp', 'desc'), limit(10));
+    const snapshot = await getDocs(q);
+    
+    let lastEntry: any = null;
+    let lastEntryId: string | null = null;
+    
+    snapshot.forEach(docSnap => {
+      if (docSnap.id < today && !lastEntry) {
+        lastEntry = docSnap.data();
+        lastEntryId = docSnap.id;
+      }
+    });
+    
+    console.log('[ROLLOVER] last entry date:', lastEntryId);
+    
+    if (!lastEntry || !lastEntryId) {
+      console.log('[ROLLOVER] skipping - no previous entries');
+      return;
+    }
+    
+    console.log('[ROLLOVER] last entry data:', lastEntry);
+    
+    // skip if already rolled
+    if (lastEntry.rolloverApplied) {
+      console.log('[ROLLOVER] skipping - already rolled', { rolloverApplied: lastEntry.rolloverApplied });
+      return;
+    }
+
+    const allTasks = lastEntry.tasks || [];
+    
+    console.log('[ROLLOVER] last entry tasks:', allTasks);
     
     // get incomplete non-routine tasks
     const incomplete = allTasks.filter((t: any) => !t.completed);
@@ -531,10 +612,16 @@ const checkRollover = async (uid: string) => {
         completed: false
       }));
 
-    // mark as rolled even if nothing to roll
-    await updateDoc(yesterdayRef, { rolloverApplied: true });
+    console.log('[ROLLOVER] rolling', rolled.length, 'tasks');
 
-    if (!rolled.length) return;
+    // mark as rolled even if nothing to roll
+    const lastEntryRef = doc(db, 'users', uid, 'entries', lastEntryId);
+    await updateDoc(lastEntryRef, { rolloverApplied: true });
+
+    if (!rolled.length) {
+      console.log('[ROLLOVER] no tasks to roll');
+      return;
+    }
 
     // write rolled tasks to TODAY's entry (not user base doc)
     const existingToday = todaySnap.exists() ? (todaySnap.data().tasks || []) : [];
@@ -554,9 +641,9 @@ const checkRollover = async (uid: string) => {
     // also update user base doc for backwards compat
     await updateDoc(doc(db, 'users', uid), { tasks: todayTasks });
 
-    console.log(`auto-rolled ${rolled.length} tasks from yesterday`);
+    console.log(`[ROLLOVER] SUCCESS: auto-rolled ${rolled.length} tasks from ${lastEntryId} to ${today}`);
   } catch (error) {
-    console.error('auto rollover failed:', error);
+    console.error('[ROLLOVER] ERROR:', error);
   }
 };
 
@@ -623,7 +710,8 @@ const manualRollover = async () => {
     await updateDoc(todayRef, {
       tasks: cleaned,
       completedCount: cleaned.filter((t: any) => t.completed).length,
-      totalTasks: cleaned.length
+      totalTasks: cleaned.length,
+      rolloverApplied: true  // mark as rolled so auto rollover skips it tomorrow
     });
 
     // sync to base user doc
@@ -896,94 +984,93 @@ const handleSignIn = async () => {
     }
   };
   
-  const acceptFollowRequest = async (requesterUid: string) => {
+  const acceptFriendRequest = async (requesterUid: string) => {
     if (!user) return;
     
     try {
-      // add them to my followers
+      // make it MUTUAL - both become friends
       const myRef = doc(db, 'users', user.uid);
       await updateDoc(myRef, {
-        followers: [...followers, requesterUid],
+        friends: [...friends, requesterUid],
         pendingRequests: pendingRequests.filter(uid => uid !== requesterUid)
       });
       
-      // add me to their following
+      // add me to their friends
       const theirRef = doc(db, 'users', requesterUid);
       const theirSnap = await getDoc(theirRef);
-      const theirFollowing = theirSnap.exists() ? (theirSnap.data().following || []) : [];
+      const theirFriends = theirSnap.exists() ? (theirSnap.data().friends || []) : [];
       await updateDoc(theirRef, {
-        following: [...theirFollowing, user.uid]
+        friends: [...theirFriends, user.uid]
       });
       
-      setFollowers([...followers, requesterUid]);
+      setFriends([...friends, requesterUid]);
       setPendingRequests(pendingRequests.filter(uid => uid !== requesterUid));
     } catch (err) {
       console.error('accept failed:', err);
     }
   };
   
-  const removeFollower = async (followerUid: string) => {
+  const removeFriend = async (friendUid: string) => {
     if (!user) return;
     
     try {
-      // remove from my followers
+      // remove from my friends
       const myRef = doc(db, 'users', user.uid);
       await updateDoc(myRef, {
-        followers: followers.filter(uid => uid !== followerUid)
+        friends: friends.filter(uid => uid !== friendUid)
       });
       
-      // remove from their following
-      const theirRef = doc(db, 'users', followerUid);
+      // remove from their friends
+      const theirRef = doc(db, 'users', friendUid);
       const theirSnap = await getDoc(theirRef);
-      const theirFollowing = theirSnap.exists() ? (theirSnap.data().following || []) : [];
+      const theirFriends = theirSnap.exists() ? (theirSnap.data().friends || []) : [];
       await updateDoc(theirRef, {
-        following: theirFollowing.filter((uid: string) => uid !== user.uid)
+        friends: theirFriends.filter((uid: string) => uid !== user.uid)
       });
       
-      setFollowers(followers.filter(uid => uid !== followerUid));
+      setFriends(friends.filter(uid => uid !== friendUid));
     } catch (err) {
       console.error('remove failed:', err);
     }
   };
   
-  const viewFollowerTasks = async (followerUid: string) => {
+  const viewFriendTasks = async (friendUid: string) => {
     if (!user) return;
     
     try {
       const today = new Date().toISOString().split('T')[0];
-      const entryRef = doc(db, 'users', followerUid, 'entries', today);
+      const entryRef = doc(db, 'users', friendUid, 'entries', today);
       const entrySnap = await getDoc(entryRef);
       
       if (entrySnap.exists()) {
-        setFollowerTasks(entrySnap.data().tasks || []);
+        setFriendTasks(entrySnap.data().tasks || []);
       } else {
-        setFollowerTasks([]);
+        setFriendTasks([]);
       }
       
-      setViewingFollower(followerUid);
-      setView('follower');
+      setViewingFriend(friendUid);
+      setView('friend');
     } catch (err) {
-      console.error('failed to load follower tasks:', err);
+      console.error('failed to load friend tasks:', err);
     }
   };
 
-  // load follower data when user loads
+  // load friend data when user loads
   useEffect(() => {
     if (!user) return;
     
-    const loadFollowerData = async () => {
+    const loadFriendData = async () => {
       const userRef = doc(db, 'users', user.uid);
       const userSnap = await getDoc(userRef);
       
       if (userSnap.exists()) {
         const data = userSnap.data();
-        setFollowers(data.followers || []);
-        setFollowing(data.following || []);
+        setFriends(data.friends || []);
         setPendingRequests(data.pendingRequests || []);
       }
     };
     
-    loadFollowerData();
+    loadFriendData();
   }, [user]);
   
   // helper to get email from uid
@@ -991,8 +1078,11 @@ const handleSignIn = async () => {
     try {
       const userRef = doc(db, 'users', uid);
       const userSnap = await getDoc(userRef);
-      return userSnap.exists() ? (userSnap.data().email || 'unknown') : 'unknown';
-    } catch {
+      const email = userSnap.exists() ? (userSnap.data().email || 'unknown') : 'unknown';
+      console.log('[EMAIL LOOKUP]', { uid, exists: userSnap.exists(), email });
+      return email;
+    } catch (err) {
+      console.error('[EMAIL LOOKUP ERROR]', uid, err);
       return 'unknown';
     }
   };
@@ -1058,7 +1148,11 @@ const addRoutineTasks = (routineType: 'morning' | 'night') => {
     if (newView === 'home') {
       transitionToSection(homeSection);
     } else if (newView === 'today') {
+      setEditingDate(new Date().toISOString().split('T')[0]); // reset to actual today
       transitionToSection(manualOverride || autoTimeSection);
+      if (user) {
+        loadUserData(user.uid); // reload today's data
+      }
     }
   };
 
@@ -2088,7 +2182,7 @@ useEffect(() => {
               </div>
 
               <div style={{ paddingTop: '1rem', borderTop: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
-                <h3 style={{ fontWeight: 600, color: '#0f172a', marginBottom: '0.5rem', fontSize: '0.9rem' }}>followers</h3>
+                <h3 style={{ fontWeight: 600, color: '#0f172a', marginBottom: '0.5rem', fontSize: '0.9rem' }}>friends</h3>
                 
                 {/* search for users */}
                 <div style={{ marginBottom: '1rem' }}>
@@ -2117,7 +2211,7 @@ useEffect(() => {
                       fontSize: '0.85rem',
                       cursor: 'pointer'
                     }}>
-                    send follow request
+                    send friend request
                   </button>
                 </div>
 
@@ -2125,26 +2219,26 @@ useEffect(() => {
                 {pendingRequests.length > 0 && (
                   <div style={{ marginBottom: '1rem' }}>
                     <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
-                      pending requests ({pendingRequests.length})
+                      friend requests ({pendingRequests.length})
                     </div>
                     {pendingRequests.map(uid => (
-                      <PendingRequest key={uid} uid={uid} onAccept={acceptFollowRequest} getEmail={getEmailFromUid} />
+                      <PendingRequest key={uid} uid={uid} onAccept={acceptFriendRequest} getEmail={getEmailFromUid} />
                     ))}
                   </div>
                 )}
 
-                {/* my followers */}
-                {followers.length > 0 && (
+                {/* my friends */}
+                {friends.length > 0 && (
                   <div style={{ marginBottom: '1rem' }}>
                     <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
-                      my followers ({followers.length})
+                      my friends ({friends.length})
                     </div>
-                    {followers.map(uid => (
-                      <FollowerItem 
+                    {friends.map(uid => (
+                      <FriendItem 
                         key={uid} 
                         uid={uid} 
-                        onRemove={removeFollower} 
-                        onView={viewFollowerTasks}
+                        onRemove={removeFriend} 
+                        onView={viewFriendTasks}
                         getEmail={getEmailFromUid} 
                       />
                     ))}
@@ -2175,7 +2269,7 @@ useEffect(() => {
             </div>
           )}
 
-          {view === 'follower' && (
+          {view === 'friend' && (
             <div style={{
               background: 'rgba(255,255,255,0.9)',
               backdropFilter: 'blur(15px) saturate(140%)',
@@ -2185,8 +2279,8 @@ useEffect(() => {
               <button
                 onClick={() => {
                   setView('settings');
-                  setViewingFollower(null);
-                  setFollowerTasks([]);
+                  setViewingFriend(null);
+                  setFriendTasks([]);
                 }}
                 style={{
                   background: 'none',
@@ -2200,14 +2294,14 @@ useEffect(() => {
               </button>
               
               <h2 style={{ color: '#0f172a', marginBottom: '1rem', marginTop: 0 }}>
-                follower's tasks
+                friend's tasks
               </h2>
 
-              {followerTasks.length === 0 ? (
+              {friendTasks.length === 0 ? (
                 <p style={{ color: '#64748b', fontSize: '0.9rem' }}>no tasks for today</p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {followerTasks.map(task => (
+                  {friendTasks.map(task => (
                     <div
                       key={task.id}
                       style={{
