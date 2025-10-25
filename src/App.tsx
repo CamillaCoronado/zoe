@@ -213,8 +213,95 @@ function Card({ children, urgent = false, overdrive = false }: CardProps) {
   return <div style={style}>{children}</div>;
 }
 
+function PendingRequest({ uid, onAccept, getEmail }: { uid: string; onAccept: (uid: string) => void; getEmail: (uid: string) => Promise<string> }) {
+  const [email, setEmail] = useState('loading...');
+  
+  useEffect(() => {
+    getEmail(uid).then(setEmail);
+  }, [uid]);
+  
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '0.5rem',
+      background: 'rgba(0,0,0,0.02)',
+      borderRadius: '6px',
+      marginBottom: '0.5rem',
+      fontSize: '0.85rem'
+    }}>
+      <span>{email}</span>
+      <button
+        onClick={() => onAccept(uid)}
+        style={{
+          padding: '0.25rem 0.5rem',
+          background: '#10b981',
+          color: 'white',
+          border: 'none',
+          borderRadius: '4px',
+          fontSize: '0.75rem',
+          cursor: 'pointer'
+        }}>
+        accept
+      </button>
+    </div>
+  );
+}
+
+function FollowerItem({ uid, onRemove, onView, getEmail }: { uid: string; onRemove: (uid: string) => void; onView: (uid: string) => void; getEmail: (uid: string) => Promise<string> }) {
+  const [email, setEmail] = useState('loading...');
+  
+  useEffect(() => {
+    getEmail(uid).then(setEmail);
+  }, [uid]);
+  
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '0.5rem',
+      background: 'rgba(0,0,0,0.02)',
+      borderRadius: '6px',
+      marginBottom: '0.5rem',
+      fontSize: '0.85rem'
+    }}>
+      <span>{email}</span>
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <button
+          onClick={() => onView(uid)}
+          style={{
+            padding: '0.25rem 0.5rem',
+            background: '#3b82f6',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            fontSize: '0.75rem',
+            cursor: 'pointer'
+          }}>
+          view
+        </button>
+        <button
+          onClick={() => onRemove(uid)}
+          style={{
+            padding: '0.25rem 0.5rem',
+            background: '#ef4444',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            fontSize: '0.75rem',
+            cursor: 'pointer'
+          }}>
+          remove
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function DailyNine() {
-  const [view, setView] = useState<'home' | 'today' | 'history' | 'settings'>('home');
+  const [view, setView] = useState<'home' | 'today' | 'history' | 'settings' | 'follower'>('home');
   const [homeSection, setHomeSection] = useState<HomeSection>('structure');
   const [autoTimeSection, setAutoTimeSection] = useState<TimeSection>(getTimeSection());
   const [manualOverride, setManualOverride] = useState<TimeSection | null>(null);
@@ -230,6 +317,14 @@ export default function DailyNine() {
 
   const [entries, setEntries] = useState<{date: string; completedCount: number; totalTasks: number;}[]>([]);
   const [entriesLoaded, setEntriesLoaded] = useState(false);
+
+  // follower stuff
+  const [followers, setFollowers] = useState<string[]>([]);
+  const [following, setFollowing] = useState<string[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<string[]>([]);
+  const [searchEmail, setSearchEmail] = useState('');
+  const [viewingFollower, setViewingFollower] = useState<string | null>(null);
+  const [followerTasks, setFollowerTasks] = useState<any[]>([]);
 
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
   const [editingDate, setEditingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
@@ -353,6 +448,22 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
   const targetDate = dateToLoad || new Date().toISOString().split('T')[0];
   const userDocRef = doc(db, 'users', uid);
   const userDoc = await getDoc(userDocRef);
+  
+  // ensure user doc exists with email
+  if (!userDoc.exists() && user?.email) {
+    await setDoc(userDocRef, {
+      email: user.email,
+      tasks: [],
+      followers: [],
+      following: [],
+      pendingRequests: [],
+      createdAt: serverTimestamp()
+    });
+  } else if (userDoc.exists() && user?.email && !userDoc.data().email) {
+    // backfill email if missing
+    await updateDoc(userDocRef, { email: user.email });
+  }
+  
   const entryRef = doc(db, 'users', uid, 'entries', targetDate);
   const entryDoc = await getDoc(entryRef);
 
@@ -729,6 +840,156 @@ const handleSignIn = async () => {
       setView('today');
     } catch (err) {
       console.error('signout failed:', err);
+    }
+  };
+
+  // follower functions
+  const sendFollowRequest = async (targetEmail: string) => {
+    if (!user || !targetEmail.trim()) return;
+    
+    try {
+      // find user by email
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef);
+      const snapshot = await getDocs(q);
+      
+      let targetUid: string | null = null;
+      snapshot.forEach(d => {
+        if (d.data().email === targetEmail.trim()) {
+          targetUid = d.id;
+        }
+      });
+      
+      if (!targetUid) {
+        alert('user not found');
+        return;
+      }
+      
+      if (targetUid === user.uid) {
+        alert('cannot follow yourself');
+        return;
+      }
+      
+      // add to their pending requests
+      const targetRef = doc(db, 'users', targetUid);
+      const targetSnap = await getDoc(targetRef);
+      const currentPending = targetSnap.exists() ? (targetSnap.data().pendingRequests || []) : [];
+      
+      if (currentPending.includes(user.uid)) {
+        alert('request already sent');
+        return;
+      }
+      
+      await updateDoc(targetRef, {
+        pendingRequests: [...currentPending, user.uid]
+      });
+      
+      alert('follow request sent');
+      setSearchEmail('');
+    } catch (err) {
+      console.error('follow request failed:', err);
+      alert('failed to send request');
+    }
+  };
+  
+  const acceptFollowRequest = async (requesterUid: string) => {
+    if (!user) return;
+    
+    try {
+      // add them to my followers
+      const myRef = doc(db, 'users', user.uid);
+      await updateDoc(myRef, {
+        followers: [...followers, requesterUid],
+        pendingRequests: pendingRequests.filter(uid => uid !== requesterUid)
+      });
+      
+      // add me to their following
+      const theirRef = doc(db, 'users', requesterUid);
+      const theirSnap = await getDoc(theirRef);
+      const theirFollowing = theirSnap.exists() ? (theirSnap.data().following || []) : [];
+      await updateDoc(theirRef, {
+        following: [...theirFollowing, user.uid]
+      });
+      
+      setFollowers([...followers, requesterUid]);
+      setPendingRequests(pendingRequests.filter(uid => uid !== requesterUid));
+    } catch (err) {
+      console.error('accept failed:', err);
+    }
+  };
+  
+  const removeFollower = async (followerUid: string) => {
+    if (!user) return;
+    
+    try {
+      // remove from my followers
+      const myRef = doc(db, 'users', user.uid);
+      await updateDoc(myRef, {
+        followers: followers.filter(uid => uid !== followerUid)
+      });
+      
+      // remove from their following
+      const theirRef = doc(db, 'users', followerUid);
+      const theirSnap = await getDoc(theirRef);
+      const theirFollowing = theirSnap.exists() ? (theirSnap.data().following || []) : [];
+      await updateDoc(theirRef, {
+        following: theirFollowing.filter(uid => uid !== user.uid)
+      });
+      
+      setFollowers(followers.filter(uid => uid !== followerUid));
+    } catch (err) {
+      console.error('remove failed:', err);
+    }
+  };
+  
+  const viewFollowerTasks = async (followerUid: string) => {
+    if (!user) return;
+    
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const entryRef = doc(db, 'users', followerUid, 'entries', today);
+      const entrySnap = await getDoc(entryRef);
+      
+      if (entrySnap.exists()) {
+        setFollowerTasks(entrySnap.data().tasks || []);
+      } else {
+        setFollowerTasks([]);
+      }
+      
+      setViewingFollower(followerUid);
+      setView('follower');
+    } catch (err) {
+      console.error('failed to load follower tasks:', err);
+    }
+  };
+
+  // load follower data when user loads
+  useEffect(() => {
+    if (!user) return;
+    
+    const loadFollowerData = async () => {
+      const userRef = doc(db, 'users', user.uid);
+      const userSnap = await getDoc(userRef);
+      
+      if (userSnap.exists()) {
+        const data = userSnap.data();
+        setFollowers(data.followers || []);
+        setFollowing(data.following || []);
+        setPendingRequests(data.pendingRequests || []);
+      }
+    };
+    
+    loadFollowerData();
+  }, [user]);
+  
+  // helper to get email from uid
+  const getEmailFromUid = async (uid: string): Promise<string> => {
+    try {
+      const userRef = doc(db, 'users', uid);
+      const userSnap = await getDoc(userRef);
+      return userSnap.exists() ? (userSnap.data().email || 'unknown') : 'unknown';
+    } catch {
+      return 'unknown';
     }
   };
 
@@ -1805,6 +2066,71 @@ useEffect(() => {
                 </button>
               </div>
 
+              <div style={{ paddingTop: '1rem', borderTop: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
+                <h3 style={{ fontWeight: 600, color: '#0f172a', marginBottom: '0.5rem', fontSize: '0.9rem' }}>followers</h3>
+                
+                {/* search for users */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <input
+                    type="email"
+                    placeholder="search by email"
+                    value={searchEmail}
+                    onChange={e => setSearchEmail(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      marginBottom: '0.5rem'
+                    }}
+                  />
+                  <button
+                    onClick={() => sendFollowRequest(searchEmail)}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      background: 'rgba(0,0,0,0.05)',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      cursor: 'pointer'
+                    }}>
+                    send follow request
+                  </button>
+                </div>
+
+                {/* pending requests */}
+                {pendingRequests.length > 0 && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                      pending requests ({pendingRequests.length})
+                    </div>
+                    {pendingRequests.map(uid => (
+                      <PendingRequest key={uid} uid={uid} onAccept={acceptFollowRequest} getEmail={getEmailFromUid} />
+                    ))}
+                  </div>
+                )}
+
+                {/* my followers */}
+                {followers.length > 0 && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                      my followers ({followers.length})
+                    </div>
+                    {followers.map(uid => (
+                      <FollowerItem 
+                        key={uid} 
+                        uid={uid} 
+                        onRemove={removeFollower} 
+                        onView={viewFollowerTasks}
+                        getEmail={getEmailFromUid} 
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div style={{ paddingTop: '1rem', borderTop: '1px solid #e2e8f0' }}>
                 <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.5rem' }}>
                   logged in as: {user?.email || 'loading...'}
@@ -1825,6 +2151,68 @@ useEffect(() => {
                   sign out
                 </button>
               </div>
+            </div>
+          )}
+
+          {view === 'follower' && (
+            <div style={{
+              background: 'rgba(255,255,255,0.9)',
+              backdropFilter: 'blur(15px) saturate(140%)',
+              borderRadius: '16px',
+              padding: '1.5rem'
+            }}>
+              <button
+                onClick={() => {
+                  setView('settings');
+                  setViewingFollower(null);
+                  setFollowerTasks([]);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#3b82f6',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  marginBottom: '1rem'
+                }}>
+                ← back to settings
+              </button>
+              
+              <h2 style={{ color: '#0f172a', marginBottom: '1rem', marginTop: 0 }}>
+                follower's tasks
+              </h2>
+
+              {followerTasks.length === 0 ? (
+                <p style={{ color: '#64748b', fontSize: '0.9rem' }}>no tasks for today</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {followerTasks.map(task => (
+                    <div
+                      key={task.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        padding: '0.75rem',
+                        background: 'rgba(0,0,0,0.02)',
+                        borderRadius: '8px'
+                      }}>
+                      {task.completed ? (
+                        <CheckCircle2 size={20} style={{ color: '#10b981', flexShrink: 0 }} />
+                      ) : (
+                        <Circle size={20} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                      )}
+                      <span style={{
+                        flex: 1,
+                        color: task.completed ? '#64748b' : '#0f172a',
+                        textDecoration: task.completed ? 'line-through' : 'none'
+                      }}>
+                        {task.title}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           </div>
