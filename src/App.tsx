@@ -817,44 +817,6 @@ const saveDailySnapshot = async () => {
   }
 };
 
-const ensureRoutinesExist = async () => {
-  if (!user) return;
-
-  const existingTitles = tasks.map(t => t.title);
-  
-  const missingMorning = morningRoutine.filter(title => !existingTitles.includes(title));
-  const missingNight = nightRoutine.filter(title => !existingTitles.includes(title));
-
-  const newTasks = [
-    ...missingMorning.map(title => ({
-      id: Date.now().toString() + Math.random().toString(36).slice(2),
-      title,
-      completed: false,
-      routineType: 'morning'
-    })),
-    ...missingNight.map(title => ({
-      id: Date.now().toString() + Math.random().toString(36).slice(2),
-      title,
-      completed: false,
-      routineType: 'night'
-    }))
-  ];
-
-  if (newTasks.length > 0) {
-    const updated = [...tasks, ...newTasks];
-    setTasks(updated);
-    const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
-    await setDoc(entryRef, {
-      tasks: updated,
-      completedCount: updated.filter(t => t.completed).length,
-      totalTasks: updated.length,
-      morningRoutine,
-      nightRoutine,
-      timestamp: serverTimestamp()
-    }, { merge: true });
-  }
-};
-
 useEffect(() => {
   if (!user || loading) return;
   
