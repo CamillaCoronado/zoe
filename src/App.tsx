@@ -348,6 +348,7 @@ export default function DailyNine() {
 
 const typingRef = useRef(false);
 
+// removed the delayed ensureRoutinesExist - now called directly during load
 
 // save routine changes to firestore
 useEffect(() => {
@@ -896,8 +897,8 @@ const handleSignIn = async () => {
     }
   };
 
-  // follower functions
-  const sendFollowRequest = async (targetEmail: string) => {
+  // friend functions
+  const sendFriendRequest = async (targetEmail: string) => {
     if (!user || !targetEmail.trim()) return;
     
     try {
@@ -919,7 +920,7 @@ const handleSignIn = async () => {
       }
       
       if (targetUid === user.uid) {
-        alert('cannot follow yourself');
+        alert('cannot add yourself as friend');
         return;
       }
       
@@ -937,10 +938,10 @@ const handleSignIn = async () => {
         pendingRequests: [...currentPending, user.uid]
       });
       
-      alert('follow request sent');
+      alert('friend request sent');
       setSearchEmail('');
     } catch (err) {
-      console.error('follow request failed:', err);
+      console.error('friend request failed:', err);
       alert('failed to send request');
     }
   };
@@ -1705,23 +1706,6 @@ useEffect(() => {
             rollover
           </button>
           <button
-            onClick={async () => {
-              if (!user) return;
-              await checkRollover(user.uid);
-              alert('test rollover complete - check console');
-            }}
-            style={{
-              padding: '0.5rem 0.75rem',
-              background: 'rgba(255,165,0,0.1)',
-              border: '1px solid rgba(255,165,0,0.3)',
-              borderRadius: '6px',
-              fontSize: '0.75rem',
-              cursor: 'pointer',
-              color: '#ff8800'
-            }}>
-            test auto rollover
-          </button>
-          <button
             onClick={planTomorrow}
             style={{
               padding: '0.5rem 0.75rem',
@@ -2162,7 +2146,7 @@ useEffect(() => {
                     }}
                   />
                   <button
-                    onClick={() => sendFollowRequest(searchEmail)}
+                    onClick={() => sendFriendRequest(searchEmail)}
                     style={{
                       width: '100%',
                       padding: '0.5rem',
