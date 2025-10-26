@@ -399,6 +399,21 @@ useEffect(() => {
   let mounted = true;
 
   const initAuth = async () => {
+    // handle redirect result in parallel (don't block auth listener)
+    Promise.race([
+      getRedirectResult(auth),
+      new Promise((resolve) => setTimeout(() => {
+        console.warn('getRedirectResult timed out after 3s');
+        resolve(null);
+      }, 3000))
+    ]).then((result: any) => {
+      if (result?.user && mounted) {
+        console.log('redirect success:', result.user.email);
+      }
+    }).catch((error) => {
+      console.error('redirect error:', error);
+    });
+
     // start auth listener immediately (don't wait for redirect)
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (!mounted) return;
