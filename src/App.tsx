@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, Users } from 'lucide-react';
-import { signInWithRedirect, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged, getRedirectResult } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
-import { getRedirectResult } from 'firebase/auth';
 
 type TimeSection = 'morning' | 'afternoon' | 'evening' | 'night';
 type HomeSection = 'structure' | 'progression' | 'economy' | 'workflows' | 'community';
@@ -399,22 +398,18 @@ useEffect(() => {
   let mounted = true;
 
   const initAuth = async () => {
-    // handle redirect result in parallel (don't block auth listener)
-    Promise.race([
-      getRedirectResult(auth),
-      new Promise((resolve) => setTimeout(() => {
-        console.warn('getRedirectResult timed out after 3s');
-        resolve(null);
-      }, 3000))
-    ]).then((result: any) => {
-      if (result?.user && mounted) {
-        console.log('redirect success:', result.user.email);
-      }
-    }).catch((error) => {
-      console.error('redirect error:', error);
-    });
+    // handle redirect result (for mobile) but don't block auth listener
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user && mounted) {
+          console.log('redirect success:', result.user.email);
+        }
+      })
+      .catch((error) => {
+        console.error('redirect error:', error);
+      });
 
-    // start auth listener immediately (don't wait for redirect)
+    // set up auth listener (starts immediately, doesn't wait for redirect)
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (!mounted) return;
       
@@ -857,13 +852,13 @@ useEffect(() => {
   // auth handlers
 const handleSignIn = async () => {
   try {
-    // use popup on localhost bc redirect doesn't work there (firebase issue)
-    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    // use popup on desktop (faster), redirect on mobile (popups blocked)
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     
-    if (isLocalhost) {
-      await signInWithPopup(auth, googleProvider);
-    } else {
+    if (isMobile) {
       await signInWithRedirect(auth, googleProvider);
+    } else {
+      await signInWithPopup(auth, googleProvider);
     }
   } catch (err) {
     console.error('signin failed:', err);
