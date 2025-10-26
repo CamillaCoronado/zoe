@@ -213,8 +213,95 @@ function Card({ children, urgent = false, overdrive = false }: CardProps) {
   return <div style={style}>{children}</div>;
 }
 
+function PendingRequest({ uid, onAccept, getEmail }: { uid: string; onAccept: (uid: string) => void; getEmail: (uid: string) => Promise<string> }) {
+  const [email, setEmail] = useState('loading...');
+  
+  useEffect(() => {
+    getEmail(uid).then(setEmail);
+  }, [uid]);
+  
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '0.5rem',
+      background: 'rgba(0,0,0,0.02)',
+      borderRadius: '6px',
+      marginBottom: '0.5rem',
+      fontSize: '0.85rem'
+    }}>
+      <span>{email}</span>
+      <button
+        onClick={() => onAccept(uid)}
+        style={{
+          padding: '0.25rem 0.5rem',
+          background: '#10b981',
+          color: 'white',
+          border: 'none',
+          borderRadius: '4px',
+          fontSize: '0.75rem',
+          cursor: 'pointer'
+        }}>
+        accept
+      </button>
+    </div>
+  );
+}
+
+function FriendItem({ uid, onRemove, onView, getEmail }: { uid: string; onRemove: (uid: string) => void; onView: (uid: string) => void; getEmail: (uid: string) => Promise<string> }) {
+  const [email, setEmail] = useState('loading...');
+  
+  useEffect(() => {
+    getEmail(uid).then(setEmail);
+  }, [uid]);
+  
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '0.5rem',
+      background: 'rgba(0,0,0,0.02)',
+      borderRadius: '6px',
+      marginBottom: '0.5rem',
+      fontSize: '0.85rem'
+    }}>
+      <span>{email}</span>
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <button
+          onClick={() => onView(uid)}
+          style={{
+            padding: '0.25rem 0.5rem',
+            background: '#3b82f6',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            fontSize: '0.75rem',
+            cursor: 'pointer'
+          }}>
+          view
+        </button>
+        <button
+          onClick={() => onRemove(uid)}
+          style={{
+            padding: '0.25rem 0.5rem',
+            background: '#ef4444',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            fontSize: '0.75rem',
+            cursor: 'pointer'
+          }}>
+          remove
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function DailyNine() {
-  const [view, setView] = useState<'home' | 'today' | 'history' | 'settings'>('home');
+  const [view, setView] = useState<'home' | 'today' | 'history' | 'settings' | 'friend'>('home');
   const [homeSection, setHomeSection] = useState<HomeSection>('structure');
   const [autoTimeSection, setAutoTimeSection] = useState<TimeSection>(getTimeSection());
   const [manualOverride, setManualOverride] = useState<TimeSection | null>(null);
@@ -230,6 +317,16 @@ export default function DailyNine() {
 
   const [entries, setEntries] = useState<{date: string; completedCount: number; totalTasks: number;}[]>([]);
   const [entriesLoaded, setEntriesLoaded] = useState(false);
+
+  // friend stuff
+  const [friends, setFriends] = useState<string[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<string[]>([]);
+  const [searchEmail, setSearchEmail] = useState('');
+  const [viewingFriend, setViewingFriend] = useState<string | null>(null);
+  const [friendTasks, setFriendTasks] = useState<any[]>([]);
+
+  // viewingFriend only used internally
+  void viewingFriend;
 
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
   const [editingDate, setEditingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
@@ -251,11 +348,25 @@ export default function DailyNine() {
 
 const typingRef = useRef(false);
 
+// removed the delayed ensureRoutinesExist - now called directly during load
+
+// save routine changes to firestore
 useEffect(() => {
-  if (!user || loading || typingRef.current) return;
-  const id = setTimeout(() => ensureRoutinesExist(), 3000);
-  return () => clearTimeout(id);
-}, [user, loading, morningRoutine, nightRoutine]);
+  if (!user || loading) return;
+  
+  const saveTimer = setTimeout(async () => {
+    try {
+      await updateDoc(doc(db, 'users', user.uid), {
+        morningRoutine,
+        nightRoutine
+      });
+    } catch (err) {
+      console.error('failed to save routines:', err);
+    }
+  }, 1000);
+  
+  return () => clearTimeout(saveTimer);
+}, [morningRoutine, nightRoutine, user, loading]);
 
 useEffect(() => {
   const initialSection =
@@ -288,6 +399,14 @@ useEffect(() => {
   let mounted = true;
 
   const initAuth = async () => {
+    // safety timeout - force loading to false after 5s no matter what
+    const safetyTimeout = setTimeout(() => {
+      if (mounted) {
+        console.warn('auth init timed out, forcing loading false');
+        setLoading(false);
+      }
+    }, 5000);
+
     try {
       // handle redirect result first
       const result = await getRedirectResult(auth);
@@ -302,6 +421,7 @@ useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (!mounted) return;
       
+      clearTimeout(safetyTimeout); // cancel timeout once auth resolves
       setLoading(true);
 
       if (firebaseUser) {
@@ -336,6 +456,21 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
   const targetDate = dateToLoad || new Date().toISOString().split('T')[0];
   const userDocRef = doc(db, 'users', uid);
   const userDoc = await getDoc(userDocRef);
+  
+  // ensure user doc exists with email
+  if (!userDoc.exists() && user?.email) {
+    await setDoc(userDocRef, {
+      email: user.email,
+      tasks: [],
+      friends: [],
+      pendingRequests: [],
+      createdAt: serverTimestamp()
+    });
+  } else if (userDoc.exists() && user?.email && !userDoc.data().email) {
+    // backfill email if missing
+    await updateDoc(userDocRef, { email: user.email });
+  }
+  
   const entryRef = doc(db, 'users', uid, 'entries', targetDate);
   const entryDoc = await getDoc(entryRef);
 
@@ -356,7 +491,17 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
 
   // only check rollover if loading today
   if (targetDate === new Date().toISOString().split('T')[0]) {
-    // await checkRollover(uid);
+    await checkRollover(uid);
+    
+    // reload today's tasks after rollover
+    const entryRefAfterRollover = doc(db, 'users', uid, 'entries', targetDate);
+    const entryDocAfterRollover = await getDoc(entryRefAfterRollover);
+    if (entryDocAfterRollover.exists()) {
+      const rolledTasks = entryDocAfterRollover.data().tasks || [];
+      if (rolledTasks.length > 0) {
+        setTasks(rolledTasks);
+      }
+    }
   }
 
   if (userDoc.exists()) {
@@ -365,111 +510,228 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
     setManualOverride(data.manualOverride || null);
     setMorningRoutine(data.morningRoutine || []);
     setNightRoutine(data.nightRoutine || []);
+    
+    // add routine tasks immediately after loading if viewing today
+    if (targetDate === new Date().toISOString().split('T')[0]) {
+      // need to wait for state to settle, then add routines
+      const morning = data.morningRoutine || [];
+      const night = data.nightRoutine || [];
+      
+      if (morning.length > 0 || night.length > 0) {
+        setTimeout(async () => {
+          const currentTasks = await getDoc(entryRef);
+          const existing = currentTasks.exists() ? (currentTasks.data().tasks || []) : [];
+          const existingTitles = existing.map((t: any) => t.title);
+          
+          const missingMorning = morning.filter((title: string) => !existingTitles.includes(title));
+          const missingNight = night.filter((title: string) => !existingTitles.includes(title));
+          
+          const newTasks = [
+            ...missingMorning.map((title: string) => ({
+              id: Date.now().toString() + Math.random().toString(36).slice(2),
+              title,
+              completed: false,
+              routineType: 'morning'
+            })),
+            ...missingNight.map((title: string) => ({
+              id: Date.now().toString() + Math.random().toString(36).slice(2),
+              title,
+              completed: false,
+              routineType: 'night'
+            }))
+          ];
+          
+          if (newTasks.length > 0) {
+            const updated = [...existing, ...newTasks];
+            setTasks(updated);
+            await setDoc(entryRef, {
+              tasks: updated,
+              completedCount: updated.filter((t: any) => t.completed).length,
+              totalTasks: updated.length,
+              morningRoutine: morning,
+              nightRoutine: night,
+              timestamp: serverTimestamp()
+            }, { merge: true });
+          }
+        }, 0);
+      }
+    }
   }
 };
 
-// const checkRollover = async (uid: string) => {
-//   const today = new Date().toISOString().split('T')[0];
-//   const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+const checkRollover = async (uid: string) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    
+    console.log('[ROLLOVER] checking rollover', { today, uid });
 
-//   const todayRef = doc(db, 'users', uid, 'entries', today);
-//   const todaySnap = await getDoc(todayRef);
-//   if (todaySnap.exists()) return; // skip if today already started
+    const todayRef = doc(db, 'users', uid, 'entries', today);
+    const todaySnap = await getDoc(todayRef);
+    
+    console.log('[ROLLOVER] today exists?', todaySnap.exists(), 'tasks:', todaySnap.exists() ? (todaySnap.data().tasks || []).length : 0);
+    
+    // skip if today already has tasks (means we already did rollover or user added tasks)
+    if (todaySnap.exists() && (todaySnap.data().tasks || []).length > 0) {
+      console.log('[ROLLOVER] skipping - today already has tasks');
+      return;
+    }
 
-//   const yesterdayRef = doc(db, 'users', uid, 'entries', yesterday);
-//   const ySnap = await getDoc(yesterdayRef);
-//   if (!ySnap.exists() || ySnap.data().rolloverApplied) return;
+    // find the LAST entry (most recent before today)
+    const entriesRef = collection(db, 'users', uid, 'entries');
+    const q = query(entriesRef, orderBy('timestamp', 'desc'), limit(10));
+    const snapshot = await getDocs(q);
+    
+    let lastEntry: any = null;
+    let lastEntryId: string | null = null;
+    
+    snapshot.forEach(docSnap => {
+      if (docSnap.id < today && !lastEntry) {
+        lastEntry = docSnap.data();
+        lastEntryId = docSnap.id;
+      }
+    });
+    
+    console.log('[ROLLOVER] last entry date:', lastEntryId);
+    
+    if (!lastEntry || !lastEntryId) {
+      console.log('[ROLLOVER] skipping - no previous entries');
+      return;
+    }
+    
+    console.log('[ROLLOVER] last entry data:', lastEntry);
+    
+    // skip if already rolled
+    if (lastEntry.rolloverApplied) {
+      console.log('[ROLLOVER] skipping - already rolled', { rolloverApplied: lastEntry.rolloverApplied });
+      return;
+    }
 
-//   const yData = ySnap.data();
-//   const incomplete = (yData.tasks || []).filter((t: any) => !t.completed);
-//   if (!incomplete.length) return;
+    const allTasks = lastEntry.tasks || [];
+    
+    console.log('[ROLLOVER] last entry tasks:', allTasks);
+    
+    // get incomplete non-routine tasks
+    const incomplete = allTasks.filter((t: any) => !t.completed);
+    const rolled = incomplete
+      .filter((t: any) => !t.routineType || t.routineType === null)
+      .map((t: any) => ({
+        ...t,
+        id: Date.now().toString() + Math.random().toString(36).slice(2, 11),
+        routineType: null,
+        completed: false
+      }));
 
-//   const allMorning = yData.morningRoutine || [];
-//   const allNight = yData.nightRoutine || [];
+    console.log('[ROLLOVER] rolling', rolled.length, 'tasks');
 
-//   const rolled = incomplete
-//     .filter((t: any) => !allMorning.includes(t.title) && !allNight.includes(t.title))
-//     .map((t: any) => ({
-//       ...t,
-//       id: Date.now().toString() + Math.random().toString(36).slice(2),
-//       routineType: null,
-//       completed: false
-//     }));
+    // mark as rolled even if nothing to roll
+    const lastEntryRef = doc(db, 'users', uid, 'entries', lastEntryId);
+    await updateDoc(lastEntryRef, { rolloverApplied: true });
 
-//   if (!rolled.length) {
-//     await updateDoc(yesterdayRef, { rolloverApplied: true });
-//     return;
-//   }
+    if (!rolled.length) {
+      console.log('[ROLLOVER] no tasks to roll');
+      return;
+    }
 
-//   const userRef = doc(db, 'users', uid);
-//   const userSnap = await getDoc(userRef);
-//   const baseTasks = userSnap.exists() ? (userSnap.data().tasks || []) : [];
-//   const updated = [...baseTasks, ...rolled];
+    // write rolled tasks to TODAY's entry (not user base doc)
+    const existingToday = todaySnap.exists() ? (todaySnap.data().tasks || []) : [];
+    const todayTasks = [...existingToday, ...rolled];
 
-//   // ✅ write rolled tasks to user
-//   await updateDoc(userRef, { tasks: updated });
-//   // ✅ mark yesterday as rolled
-//   await updateDoc(yesterdayRef, { rolloverApplied: true });
+    await setDoc(
+      todayRef,
+      {
+        tasks: todayTasks,
+        completedCount: todayTasks.filter((t: any) => t.completed).length,
+        totalTasks: todayTasks.length,
+        timestamp: serverTimestamp()
+      },
+      { merge: true }
+    );
 
-//   // 🧹 remove rolled tasks from yesterday’s entry
-//   const cleaned = (yData.tasks || []).filter(
-//     (t: any) => !rolled.some((r: any) => r.title === t.title)
-//   );
-//   await updateDoc(yesterdayRef, { tasks: cleaned });
-// };
+    // also update user base doc for backwards compat
+    await updateDoc(doc(db, 'users', uid), { tasks: todayTasks });
+
+    console.log(`[ROLLOVER] SUCCESS: auto-rolled ${rolled.length} tasks from ${lastEntryId} to ${today}`);
+  } catch (error) {
+    console.error('[ROLLOVER] ERROR:', error);
+  }
+};
 
 
 const manualRollover = async () => {
   if (!user) return;
-  const today = new Date().toISOString().split("T")[0];
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+  
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
 
-  const todayRef = doc(db, "users", user.uid, "entries", today);
-  const snap = await getDoc(todayRef);
-  if (!snap.exists()) return alert("no tasks found for today");
+    const todayRef = doc(db, "users", user.uid, "entries", today);
+    const snap = await getDoc(todayRef);
+    
+    if (!snap.exists()) {
+      alert("no tasks found for today");
+      return;
+    }
 
-  const data = snap.data();
-  const incomplete = (data.tasks || []).filter((t: any) => !t.completed);
-  const rolled = incomplete.filter(
-    (t: any) => !["morning", "night"].includes(t.routineType)
-  ).map((t: any) => ({
-    ...t,
-    id: crypto.randomUUID(),
-    completed: false,
-    routineType: null
-  }));
-  if (!rolled.length) return alert("nothing to roll");
+    const data = snap.data();
+    const allTasks = data.tasks || [];
+    
+    // get incomplete non-routine tasks
+    const incomplete = allTasks.filter((t: any) => !t.completed);
+    const rolled = incomplete
+      .filter((t: any) => !t.routineType || t.routineType === null)
+      .map((t: any) => ({
+        ...t,
+        id: Date.now().toString() + Math.random().toString(36).slice(2, 11),
+        completed: false,
+        routineType: null
+      }));
+    
+    if (!rolled.length) {
+      alert("nothing to roll - all incomplete tasks are routine tasks");
+      return;
+    }
 
-  const tomorrowRef = doc(db, "users", user.uid, "entries", tomorrow);
-  const tomorrowData = (await getDoc(tomorrowRef)).data() || {};
-  const updatedTomorrow = [...(tomorrowData.tasks || []), ...rolled];
+    // get tomorrow's existing tasks
+    const tomorrowRef = doc(db, "users", user.uid, "entries", tomorrow);
+    const tomorrowSnap = await getDoc(tomorrowRef);
+    const tomorrowData = tomorrowSnap.exists() ? tomorrowSnap.data() : {};
+    const existingTomorrowTasks = tomorrowData.tasks || [];
+    
+    // merge rolled tasks into tomorrow
+    const updatedTomorrow = [...existingTomorrowTasks, ...rolled];
 
-  await setDoc(
-    tomorrowRef,
-    {
-      tasks: updatedTomorrow,
-      completedCount: updatedTomorrow.filter(t => t.completed).length,
-      totalTasks: updatedTomorrow.length,
-      timestamp: serverTimestamp()
-    },
-    { merge: true }
-  );
+    await setDoc(
+      tomorrowRef,
+      {
+        tasks: updatedTomorrow,
+        completedCount: updatedTomorrow.filter((t: any) => t.completed).length,
+        totalTasks: updatedTomorrow.length,
+        timestamp: serverTimestamp()
+      },
+      { merge: true }
+    );
 
-  const cleaned = (data.tasks || []).filter(
-    (t: any) => !rolled.some((r: any) => r.title === t.title)
-  );
+    // remove rolled tasks from today
+    const cleaned = allTasks.filter(
+      (t: any) => !rolled.some((r: any) => r.title === t.title && !t.completed)
+    );
 
-  await updateDoc(todayRef, {
-    tasks: cleaned,
-    completedCount: cleaned.filter((t: any) => t.completed).length,
-    totalTasks: cleaned.length
-  });
+    await updateDoc(todayRef, {
+      tasks: cleaned,
+      completedCount: cleaned.filter((t: any) => t.completed).length,
+      totalTasks: cleaned.length,
+      rolloverApplied: true  // mark as rolled so auto rollover skips it tomorrow
+    });
 
-  // sync base doc
-  await updateDoc(doc(db, "users", user.uid), { tasks: cleaned });
+    // sync to base user doc
+    await updateDoc(doc(db, "users", user.uid), { tasks: cleaned });
 
-  setTasks(cleaned);
-  alert(`rolled ${rolled.length} task${rolled.length > 1 ? "s" : ""}`);
+    setTasks(cleaned);
+    alert(`rolled ${rolled.length} task${rolled.length > 1 ? "s" : ""} to tomorrow`);
+  } catch (error) {
+    console.error('rollover failed:', error);
+    alert('rollover failed - check console');
+  }
 };
 
 
@@ -525,17 +787,8 @@ const saveUserData = async () => {
   
   const today = new Date().toISOString().split('T')[0];
   
-  // ALWAYS save to the daily entry
-  const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
-  await setDoc(entryRef, {
-    tasks,
-    completedCount: tasks.filter(t => t.completed).length,
-    totalTasks: tasks.length,
-    timestamp: serverTimestamp()
-  }, { merge: true });
-  
-  // also update base user doc if editing today (for backwards compat)
   if (editingDate === today) {
+    // only update user doc when editing today
     await updateDoc(doc(db, 'users', user.uid), {
       tasks,
       homeSection,
@@ -544,46 +797,18 @@ const saveUserData = async () => {
       nightRoutine,
       updatedAt: serverTimestamp()
     });
-  }
-};
-
-const ensureRoutinesExist = async () => {
-  if (!user) return;
-
-  const existingTitles = tasks.map(t => t.title);
-  
-  const missingMorning = morningRoutine.filter(title => !existingTitles.includes(title));
-  const missingNight = nightRoutine.filter(title => !existingTitles.includes(title));
-
-  const newTasks = [
-    ...missingMorning.map(title => ({
-      id: Date.now().toString() + Math.random().toString(36).slice(2),
-      title,
-      completed: false,
-      routineType: 'morning'
-    })),
-    ...missingNight.map(title => ({
-      id: Date.now().toString() + Math.random().toString(36).slice(2),
-      title,
-      completed: false,
-      routineType: 'night'
-    }))
-  ];
-
-  if (newTasks.length > 0) {
-    const updated = [...tasks, ...newTasks];
-    setTasks(updated);
+  } else {
+    // save to specific date entry
     const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
     await setDoc(entryRef, {
-      tasks: updated,
-      completedCount: updated.filter(t => t.completed).length,
-      totalTasks: updated.length,
-      morningRoutine,
-      nightRoutine,
+      tasks,
+      completedCount: tasks.filter(t => t.completed).length,
+      totalTasks: tasks.length,
       timestamp: serverTimestamp()
     }, { merge: true });
   }
 };
+
 
 useEffect(() => {
   if (!user || loading) return;
@@ -645,12 +870,166 @@ const handleSignIn = async () => {
   }
 };
 
+
+
   const handleSignOut = async () => {
     try {
       await signOut(auth);
       setView('today');
     } catch (err) {
       console.error('signout failed:', err);
+    }
+  };
+
+  // friend functions
+  const sendFriendRequest = async (targetEmail: string) => {
+    if (!user || !targetEmail.trim()) return;
+    
+    try {
+      // find user by email
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef);
+      const snapshot = await getDocs(q);
+      
+      let targetUid: string | null = null;
+      snapshot.forEach(d => {
+        if (d.data().email === targetEmail.trim()) {
+          targetUid = d.id;
+        }
+      });
+      
+      if (!targetUid) {
+        alert('user not found');
+        return;
+      }
+      
+      if (targetUid === user.uid) {
+        alert('cannot add yourself as friend');
+        return;
+      }
+      
+      // add to their pending requests
+      const targetRef = doc(db, 'users', targetUid);
+      const targetSnap = await getDoc(targetRef);
+      const currentPending = targetSnap.exists() ? (targetSnap.data().pendingRequests || []) : [];
+      
+      if (currentPending.includes(user.uid)) {
+        alert('request already sent');
+        return;
+      }
+      
+      await updateDoc(targetRef, {
+        pendingRequests: [...currentPending, user.uid]
+      });
+      
+      alert('friend request sent');
+      setSearchEmail('');
+    } catch (err) {
+      console.error('friend request failed:', err);
+      alert('failed to send request');
+    }
+  };
+  
+  const acceptFriendRequest = async (requesterUid: string) => {
+    if (!user) return;
+    
+    try {
+      // make it MUTUAL - both become friends
+      const myRef = doc(db, 'users', user.uid);
+      await updateDoc(myRef, {
+        friends: [...friends, requesterUid],
+        pendingRequests: pendingRequests.filter(uid => uid !== requesterUid)
+      });
+      
+      // add me to their friends
+      const theirRef = doc(db, 'users', requesterUid);
+      const theirSnap = await getDoc(theirRef);
+      const theirFriends = theirSnap.exists() ? (theirSnap.data().friends || []) : [];
+      await updateDoc(theirRef, {
+        friends: [...theirFriends, user.uid]
+      });
+      
+      setFriends([...friends, requesterUid]);
+      setPendingRequests(pendingRequests.filter(uid => uid !== requesterUid));
+    } catch (err) {
+      console.error('accept failed:', err);
+    }
+  };
+  
+  const removeFriend = async (friendUid: string) => {
+    if (!user) return;
+    
+    try {
+      // remove from my friends
+      const myRef = doc(db, 'users', user.uid);
+      await updateDoc(myRef, {
+        friends: friends.filter(uid => uid !== friendUid)
+      });
+      
+      // remove from their friends
+      const theirRef = doc(db, 'users', friendUid);
+      const theirSnap = await getDoc(theirRef);
+      const theirFriends = theirSnap.exists() ? (theirSnap.data().friends || []) : [];
+      await updateDoc(theirRef, {
+        friends: theirFriends.filter((uid: string) => uid !== user.uid)
+      });
+      
+      setFriends(friends.filter(uid => uid !== friendUid));
+    } catch (err) {
+      console.error('remove failed:', err);
+    }
+  };
+  
+  const viewFriendTasks = async (friendUid: string) => {
+    if (!user) return;
+    
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const entryRef = doc(db, 'users', friendUid, 'entries', today);
+      const entrySnap = await getDoc(entryRef);
+      
+      if (entrySnap.exists()) {
+        setFriendTasks(entrySnap.data().tasks || []);
+      } else {
+        setFriendTasks([]);
+      }
+      
+      setViewingFriend(friendUid);
+      setView('friend');
+    } catch (err) {
+      console.error('failed to load friend tasks:', err);
+    }
+  };
+
+  // load friend data when user loads
+  useEffect(() => {
+    if (!user) return;
+    
+    const loadFriendData = async () => {
+      const userRef = doc(db, 'users', user.uid);
+      const userSnap = await getDoc(userRef);
+      
+      if (userSnap.exists()) {
+        const data = userSnap.data();
+        setFriends(data.friends || []);
+        setPendingRequests(data.pendingRequests || []);
+      }
+    };
+    
+    loadFriendData();
+  }, [user]);
+  
+  // helper to get email from uid
+  const getEmailFromUid = async (uid: string): Promise<string> => {
+    try {
+      const userRef = doc(db, 'users', uid);
+      const userSnap = await getDoc(userRef);
+      const email = userSnap.exists() ? (userSnap.data().email || 'unknown') : 'unknown';
+      console.log('[EMAIL LOOKUP]', { uid, exists: userSnap.exists(), email });
+      return email;
+    } catch (err) {
+      console.error('[EMAIL LOOKUP ERROR]', uid, err);
+      return 'unknown';
     }
   };
 
@@ -715,7 +1094,11 @@ const addRoutineTasks = (routineType: 'morning' | 'night') => {
     if (newView === 'home') {
       transitionToSection(homeSection);
     } else if (newView === 'today') {
+      setEditingDate(new Date().toISOString().split('T')[0]); // reset to actual today
       transitionToSection(manualOverride || autoTimeSection);
+      if (user) {
+        loadUserData(user.uid); // reload today's data
+      }
     }
   };
 
@@ -1606,9 +1989,16 @@ useEffect(() => {
                         }}
                       />
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           const updated = morningRoutine.filter((_, idx) => idx !== i);
                           setMorningRoutine(updated);
+                          
+                          // save to firestore immediately
+                          if (user) {
+                            await updateDoc(doc(db, 'users', user.uid), {
+                              morningRoutine: updated
+                            });
+                          }
                         }}
                         style={{
                           background: 'none',
@@ -1679,9 +2069,16 @@ useEffect(() => {
                         }}
                       />
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           const updated = nightRoutine.filter((_, idx) => idx !== i);
                           setNightRoutine(updated);
+                          
+                          // save to firestore immediately
+                          if (user) {
+                            await updateDoc(doc(db, 'users', user.uid), {
+                              nightRoutine: updated
+                            });
+                          }
                         }}
                         style={{
                           background: 'none',
@@ -1713,6 +2110,71 @@ useEffect(() => {
                 </button>
               </div>
 
+              <div style={{ paddingTop: '1rem', borderTop: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
+                <h3 style={{ fontWeight: 600, color: '#0f172a', marginBottom: '0.5rem', fontSize: '0.9rem' }}>friends</h3>
+                
+                {/* search for users */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <input
+                    type="email"
+                    placeholder="search by email"
+                    value={searchEmail}
+                    onChange={e => setSearchEmail(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      marginBottom: '0.5rem'
+                    }}
+                  />
+                  <button
+                    onClick={() => sendFriendRequest(searchEmail)}
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem',
+                      background: 'rgba(0,0,0,0.05)',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      cursor: 'pointer'
+                    }}>
+                    send friend request
+                  </button>
+                </div>
+
+                {/* pending requests */}
+                {pendingRequests.length > 0 && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                      friend requests ({pendingRequests.length})
+                    </div>
+                    {pendingRequests.map(uid => (
+                      <PendingRequest key={uid} uid={uid} onAccept={acceptFriendRequest} getEmail={getEmailFromUid} />
+                    ))}
+                  </div>
+                )}
+
+                {/* my friends */}
+                {friends.length > 0 && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                      my friends ({friends.length})
+                    </div>
+                    {friends.map(uid => (
+                      <FriendItem 
+                        key={uid} 
+                        uid={uid} 
+                        onRemove={removeFriend} 
+                        onView={viewFriendTasks}
+                        getEmail={getEmailFromUid} 
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div style={{ paddingTop: '1rem', borderTop: '1px solid #e2e8f0' }}>
                 <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.5rem' }}>
                   logged in as: {user?.email || 'loading...'}
@@ -1733,6 +2195,68 @@ useEffect(() => {
                   sign out
                 </button>
               </div>
+            </div>
+          )}
+
+          {view === 'friend' && (
+            <div style={{
+              background: 'rgba(255,255,255,0.9)',
+              backdropFilter: 'blur(15px) saturate(140%)',
+              borderRadius: '16px',
+              padding: '1.5rem'
+            }}>
+              <button
+                onClick={() => {
+                  setView('settings');
+                  setViewingFriend(null);
+                  setFriendTasks([]);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#3b82f6',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  marginBottom: '1rem'
+                }}>
+                ← back to settings
+              </button>
+              
+              <h2 style={{ color: '#0f172a', marginBottom: '1rem', marginTop: 0 }}>
+                friend's tasks
+              </h2>
+
+              {friendTasks.length === 0 ? (
+                <p style={{ color: '#64748b', fontSize: '0.9rem' }}>no tasks for today</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {friendTasks.map(task => (
+                    <div
+                      key={task.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        padding: '0.75rem',
+                        background: 'rgba(0,0,0,0.02)',
+                        borderRadius: '8px'
+                      }}>
+                      {task.completed ? (
+                        <CheckCircle2 size={20} style={{ color: '#10b981', flexShrink: 0 }} />
+                      ) : (
+                        <Circle size={20} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                      )}
+                      <span style={{
+                        flex: 1,
+                        color: task.completed ? '#64748b' : '#0f172a',
+                        textDecoration: task.completed ? 'line-through' : 'none'
+                      }}>
+                        {task.title}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           </div>
