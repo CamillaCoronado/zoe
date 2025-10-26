@@ -399,36 +399,36 @@ useEffect(() => {
   let mounted = true;
 
   const initAuth = async () => {
-    // safety timeout - force loading to false after 5s no matter what
-    const safetyTimeout = setTimeout(() => {
-      if (mounted) {
-        console.warn('auth init timed out, forcing loading false');
-        setLoading(false);
-      }
-    }, 5000);
-
-    try {
-      // handle redirect result first
-      const result = await getRedirectResult(auth);
+    // handle redirect result in parallel (don't block auth listener)
+    Promise.race([
+      getRedirectResult(auth),
+      new Promise((resolve) => setTimeout(() => {
+        console.warn('getRedirectResult timed out after 3s');
+        resolve(null);
+      }, 3000))
+    ]).then((result: any) => {
       if (result?.user && mounted) {
         console.log('redirect success:', result.user.email);
       }
-    } catch (error) {
+    }).catch((error) => {
       console.error('redirect error:', error);
-    }
+    });
 
-    // then set up the auth state listener
+    // start auth listener immediately (don't wait for redirect)
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (!mounted) return;
       
-      clearTimeout(safetyTimeout); // cancel timeout once auth resolves
       setLoading(true);
 
       if (firebaseUser) {
         setUser(firebaseUser);
-        setEditingDate(new Date().toISOString().split('T')[0]); // reset to actual today
+        setEditingDate(new Date().toISOString().split('T')[0]);
         loadUserData(firebaseUser.uid)
           .then(() => {
+            setView('today');
+          })
+          .catch((error) => {
+            console.error('loadUserData failed:', error);
             setView('today');
           })
           .finally(() => setLoading(false));
@@ -787,8 +787,17 @@ const saveUserData = async () => {
   
   const today = new Date().toISOString().split('T')[0];
   
+  // ALWAYS save to the daily entry
+  const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
+  await setDoc(entryRef, {
+    tasks,
+    completedCount: tasks.filter(t => t.completed).length,
+    totalTasks: tasks.length,
+    timestamp: serverTimestamp()
+  }, { merge: true });
+  
+  // also update base user doc if editing today (for backwards compat)
   if (editingDate === today) {
-    // only update user doc when editing today
     await updateDoc(doc(db, 'users', user.uid), {
       tasks,
       homeSection,
@@ -797,15 +806,6 @@ const saveUserData = async () => {
       nightRoutine,
       updatedAt: serverTimestamp()
     });
-  } else {
-    // save to specific date entry
-    const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
-    await setDoc(entryRef, {
-      tasks,
-      completedCount: tasks.filter(t => t.completed).length,
-      totalTasks: tasks.length,
-      timestamp: serverTimestamp()
-    }, { merge: true });
   }
 };
 
