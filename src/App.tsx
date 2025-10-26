@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, Users } from 'lucide-react';
-import { signInWithRedirect, signOut, onAuthStateChanged } from 'firebase/auth';
+import { signInWithRedirect, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
-import { getRedirectResult, signInWithPopup } from 'firebase/auth';
+import { getRedirectResult } from 'firebase/auth';
 
 type TimeSection = 'morning' | 'afternoon' | 'evening' | 'night';
 type HomeSection = 'structure' | 'progression' | 'economy' | 'workflows' | 'community';
@@ -285,25 +285,50 @@ useEffect(() => {
 }, [user, view]);
 
 useEffect(() => {
-  const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-    setLoading(true);
+  let mounted = true;
 
-    if (firebaseUser) {
-      setUser(firebaseUser);
-      loadUserData(firebaseUser.uid)
-        .then(() => {
-          setView('today');
-        })
-        .finally(() => setLoading(false));
-    } else {
-      setUser(null);
-      setTasks([]);
-      setView('home');
-      setLoading(false);
+  const initAuth = async () => {
+    try {
+      // handle redirect result first
+      const result = await getRedirectResult(auth);
+      if (result?.user && mounted) {
+        console.log('redirect success:', result.user.email);
+      }
+    } catch (error) {
+      console.error('redirect error:', error);
     }
-  });
 
-  return () => unsubscribe();
+    // then set up the auth state listener
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (!mounted) return;
+      
+      setLoading(true);
+
+      if (firebaseUser) {
+        setUser(firebaseUser);
+        setEditingDate(new Date().toISOString().split('T')[0]); // reset to actual today
+        loadUserData(firebaseUser.uid)
+          .then(() => {
+            setView('today');
+          })
+          .finally(() => setLoading(false));
+      } else {
+        setUser(null);
+        setTasks([]);
+        setView('home');
+        setLoading(false);
+      }
+    });
+
+    return unsubscribe;
+  };
+
+  const cleanupPromise = initAuth();
+
+  return () => {
+    mounted = false;
+    cleanupPromise.then(unsub => unsub?.());
+  };
 }, []);
 
 
@@ -522,23 +547,6 @@ const saveUserData = async () => {
   }
 };
 
-const saveDailySnapshot = async () => {
-  if (!user) return;
-  
-  const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
-  
-  try {
-    await setDoc(entryRef, {
-      tasks,
-      completedCount: tasks.filter(t => t.completed).length,
-      totalTasks: tasks.length,
-      timestamp: serverTimestamp()
-    }, { merge: true });
-  } catch (err) {
-    console.error('daily snapshot failed:', err);
-  }
-};
-
 const ensureRoutinesExist = async () => {
   if (!user) return;
 
@@ -585,16 +593,7 @@ useEffect(() => {
   }, 1000);
   
   return () => clearTimeout(timeoutId);
-}, [tasks, homeSection, manualOverride, morningRoutine, nightRoutine, user, loading]);
-
-
-useEffect(() => {
-  if (!user || loading) return;
-  const timeoutId = setTimeout(() => {
-    saveDailySnapshot();
-  }, 2000); // delay saves to batch with other updates
-  return () => clearTimeout(timeoutId);
-}, [tasks, user, loading, editingDate]);
+}, [tasks, homeSection, manualOverride, morningRoutine, nightRoutine, user, loading, editingDate]);
 
 useEffect(() => {
   if (!user) return;
@@ -645,12 +644,6 @@ const handleSignIn = async () => {
     console.error('signin failed:', err);
   }
 };
-
-  useEffect(() => {
-  getRedirectResult(auth).then((result) => {
-    if (result?.user) setUser(result.user);
-  }).catch(console.error);
-}, []);
 
   const handleSignOut = async () => {
     try {
