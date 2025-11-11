@@ -773,43 +773,47 @@ const backToToday = () => {
   loadUserData(user.uid);
 };
 
-
-
-
-  // save user data
-const saveUserData = async () => {
-  if (!user || loading) return;
+const viewPastEntry = async (date: string) => {
+  if (!user) return;
+  setEditingDate(date);
   
-  const today = new Date().toISOString().split('T')[0];
+  const entryRef = doc(db, 'users', user.uid, 'entries', date);
+  const entrySnap = await getDoc(entryRef);
   
-  // ALWAYS save to the daily entry
-  const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
-  await setDoc(entryRef, {
-    tasks,
-    completedCount: tasks.filter(t => t.completed).length,
-    totalTasks: tasks.length,
-    timestamp: serverTimestamp()
-  }, { merge: true });
-  
-  // also update base user doc if editing today (for backwards compat)
-  if (editingDate === today) {
-    await updateDoc(doc(db, 'users', user.uid), {
-      tasks,
-      homeSection,
-      manualOverride,
-      morningRoutine,
-      nightRoutine,
-      updatedAt: serverTimestamp()
-    });
+  if (entrySnap.exists()) {
+    setTasks(entrySnap.data().tasks || []);
+  } else {
+    setTasks([]);
   }
+  
+  setView('today'); // reuse today view for editing
 };
 
 
 useEffect(() => {
   if (!user || loading) return;
   
-  const timeoutId = setTimeout(() => {
-    saveUserData();
+  const timeoutId = setTimeout(async () => {
+    const today = new Date().toISOString().split('T')[0];
+    
+    const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
+    await setDoc(entryRef, {
+      tasks,
+      completedCount: tasks.filter(t => t.completed).length,
+      totalTasks: tasks.length,
+      timestamp: serverTimestamp()
+    }, { merge: true });
+    
+    if (editingDate === today) {
+      await updateDoc(doc(db, 'users', user.uid), {
+        tasks,
+        homeSection,
+        manualOverride,
+        morningRoutine,
+        nightRoutine,
+        updatedAt: serverTimestamp()
+      });
+    }
   }, 1000);
   
   return () => clearTimeout(timeoutId);
@@ -1715,9 +1719,20 @@ useEffect(() => {
       )}
     </div>
                 
-                <div style={{ color: '#0f172a', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                  completed: {completedCount}/9
-                </div>
+              <div style={{ 
+                color: '#0f172a', 
+                marginBottom: '1rem', 
+                fontSize: '0.9rem',
+                fontWeight: editingDate !== new Date().toISOString().split('T')[0] ? 600 : 400,
+                background: editingDate !== new Date().toISOString().split('T')[0] ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
+                padding: editingDate !== new Date().toISOString().split('T')[0] ? '0.5rem 0.75rem' : '0',
+                borderRadius: '6px'
+              }}>
+                {editingDate === new Date().toISOString().split('T')[0] 
+                  ? `completed: ${completedCount}/9`
+                  : `editing ${editingDate} - completed: ${completedCount}/9`
+                }
+              </div>
                 <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
                   <input
                     type="text"
@@ -1903,37 +1918,45 @@ useEffect(() => {
               </div>
             )}
 
-            {view === 'history' && (
-              <div style={{
-                background: 'rgba(255,255,255,0.9)',
-                backdropFilter: 'blur(15px) saturate(140%)',
-                borderRadius: '16px',
-                padding: '1.5rem'
-              }}>
-                <h2 style={{ color: '#0f172a', marginBottom: '1rem' }}>past entries</h2>
-                {entries.length === 0 ? (
-                  <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
-                    {entriesLoaded ? 'no entries yet.' : 'loading...'}
-                  </p>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {entries.map(e => (
-                      <div key={e.date} style={{
+          {view === 'history' && (
+            <div style={{
+              background: 'rgba(255,255,255,0.9)',
+              backdropFilter: 'blur(15px) saturate(140%)',
+              borderRadius: '16px',
+              padding: '1.5rem'
+            }}>
+              <h2 style={{ color: '#0f172a', marginBottom: '1rem' }}>past entries</h2>
+              {entries.length === 0 ? (
+                <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
+                  {entriesLoaded ? 'no entries yet.' : 'loading...'}
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {entries.map(e => (
+                    <div 
+                      key={e.date} 
+                      onClick={() => viewPastEntry(e.date)}
+                      style={{
                         padding: '0.75rem',
                         background: 'rgba(0,0,0,0.05)',
-                        borderRadius: '8px'
-                      }}>
-                        <div style={{ fontWeight: 600, color: '#0f172a' }}>{e.date}</div>
-                        <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
-                          completed: {e.completedCount}/{e.totalTasks}
-                          {e.completedCount === 9 && ' 🎉'}
-                        </div>
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={(ev) => ev.currentTarget.style.background = 'rgba(0,0,0,0.08)'}
+                      onMouseLeave={(ev) => ev.currentTarget.style.background = 'rgba(0,0,0,0.05)'}
+                    >
+                      <div style={{ fontWeight: 600, color: '#0f172a' }}>{e.date}</div>
+                      <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                        completed: {e.completedCount}/{e.totalTasks}
+                        {e.completedCount === 9 && ' 🎉'}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
 
           {view === 'settings' && (
@@ -2153,8 +2176,8 @@ useEffect(() => {
 
                 {/* my friends */}
                 {friends.length > 0 && (
-                  <div style={{ marginBottom: '1rem' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                  <div style={{ marginBottom: '1rem', color: '#64748b' }}>
+                    <div style={{ fontSize: '0.75rem', marginBottom: '0.5rem' }}>
                       my friends ({friends.length})
                     </div>
                     {friends.map(uid => (
