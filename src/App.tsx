@@ -4,6 +4,7 @@ import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged, getRe
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
+import confetti from 'canvas-confetti';
 
 type TimeSection = 'morning' | 'afternoon' | 'evening' | 'night';
 type HomeSection = 'structure' | 'progression' | 'economy' | 'workflows' | 'community';
@@ -175,28 +176,6 @@ const SvgLayer = ({ section }: { section: TimeSection | HomeSection }) => {
   );
 };
 
-const Confetti = ({ show }: { show: boolean }) => {
-  if (!show) return null;
-
-  return (
-    <div className="fixed inset-0 pointer-events-none overflow-hidden z-50">
-      {Array.from({ length: 50 }).map((_, i) => (
-        <div
-          key={i}
-          className="absolute w-2 h-2 animate-bounce"
-          style={{
-            left: `${Math.random() * 100}%`,
-            top: '-20px',
-            backgroundColor: ['#fbbf24', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6'][i % 5],
-            animationDelay: `${Math.random() * 0.5}s`,
-            animationDuration: `${2 + Math.random() * 2}s`
-          }}
-        />
-      ))}
-    </div>
-  );
-};
-
 type CardProps = { children: React.ReactNode; urgent?: boolean; overdrive?: boolean };
 function Card({ children, urgent = false, overdrive = false }: CardProps) {
   let style: React.CSSProperties = {
@@ -329,6 +308,7 @@ export default function DailyNine() {
 
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
   const [editingDate, setEditingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  
 
 
   // auto time tracking for today view
@@ -1102,13 +1082,45 @@ const addRoutineTasks = (routineType: 'morning' | 'night') => {
   };
 
   const completedCount = tasks.filter(t => t.completed).length;
+  const prevCompletedRef = useRef(completedCount);
 
-  useEffect(() => {
-    if (completedCount === 9 && tasks.length >= 9) {
-      setShowConfetti(true);
-      setTimeout(() => setShowConfetti(false), 4000);
-    }
-  }, [completedCount, tasks.length]);
+useEffect(() => {
+  const today = new Date().toISOString().split('T')[0];
+  
+  // only fire if we JUST hit 9 (went from 8->9, not already at 9)
+  if (
+    completedCount === 9 && 
+    prevCompletedRef.current === 8 &&
+    tasks.length >= 9 && 
+    editingDate === today
+  ) {
+    const duration = 3000;
+    const animationEnd = Date.now() + duration;
+
+    const interval = setInterval(() => {
+      const timeLeft = animationEnd - Date.now();
+      
+      if (timeLeft <= 0) {
+        return clearInterval(interval);
+      }
+
+      const particleCount = 50 * (timeLeft / duration);
+      
+      confetti({
+        particleCount,
+        startVelocity: 30,
+        spread: 360,
+        origin: {
+          x: Math.random(),
+          y: Math.random() - 0.2
+        }
+      });
+    }, 250);
+  }
+  
+  // update ref for next render
+  prevCompletedRef.current = completedCount;
+}, [completedCount, tasks.length, editingDate]);
 
 
 useEffect(() => {
@@ -1212,8 +1224,6 @@ useEffect(() => {
             </div>
           ))}
         </div>
-
-        <Confetti show={showConfetti} />
 
         <div style={{
           position: 'relative',
