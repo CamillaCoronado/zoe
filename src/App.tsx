@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, Users } from 'lucide-react';
+import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, RefreshCw, Users } from 'lucide-react';
 import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged, getRedirectResult } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
+import confetti from 'canvas-confetti';
 
 type TimeSection = 'morning' | 'afternoon' | 'evening' | 'night';
 type HomeSection = 'structure' | 'progression' | 'economy' | 'workflows' | 'community';
@@ -175,28 +176,6 @@ const SvgLayer = ({ section }: { section: TimeSection | HomeSection }) => {
   );
 };
 
-const Confetti = ({ show }: { show: boolean }) => {
-  if (!show) return null;
-
-  return (
-    <div className="fixed inset-0 pointer-events-none overflow-hidden z-50">
-      {Array.from({ length: 50 }).map((_, i) => (
-        <div
-          key={i}
-          className="absolute w-2 h-2 animate-bounce"
-          style={{
-            left: `${Math.random() * 100}%`,
-            top: '-20px',
-            backgroundColor: ['#fbbf24', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6'][i % 5],
-            animationDelay: `${Math.random() * 0.5}s`,
-            animationDuration: `${2 + Math.random() * 2}s`
-          }}
-        />
-      ))}
-    </div>
-  );
-};
-
 type CardProps = { children: React.ReactNode; urgent?: boolean; overdrive?: boolean };
 function Card({ children, urgent = false, overdrive = false }: CardProps) {
   let style: React.CSSProperties = {
@@ -300,7 +279,7 @@ function FriendItem({ uid, onRemove, onView, getEmail }: { uid: string; onRemove
 }
 
 export default function DailyNine() {
-  const [view, setView] = useState<'home' | 'today' | 'history' | 'settings' | 'friend'>('home');
+  const [view, setView] = useState<'home' | 'today' | 'history' | 'settings' | 'friend' | 'leaderboard'>('home');
   const [homeSection, setHomeSection] = useState<HomeSection>('structure');
   const [autoTimeSection, setAutoTimeSection] = useState<TimeSection>(getTimeSection());
   const [manualOverride, setManualOverride] = useState<TimeSection | null>(null);
@@ -308,11 +287,14 @@ export default function DailyNine() {
   const [contentVisible, setContentVisible] = useState<boolean>(true);
   const [tasks, setTasks] = useState<{ id: string; title: string; completed: boolean; routineType: string | null }[]>([]);
   const [newTask, setNewTask] = useState('');
-  const [showConfetti, setShowConfetti] = useState(false);
   const [morningRoutine, setMorningRoutine] = useState<string[]>([]);
   const [nightRoutine, setNightRoutine] = useState<string[]>([]);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [leaderboardData, setLeaderboardData] = useState<any[]>([]);
+  const [leaderboardLoaded, setLeaderboardLoaded] = useState(false);
+  const [leaderboardTab, setLeaderboardTab] = useState<'today' | 'week'>('today');
+  const [lastLeaderboardUpdate, setLastLeaderboardUpdate] = useState<Date | null>(null);
 
   const [entries, setEntries] = useState<{date: string; completedCount: number; totalTasks: number;}[]>([]);
   const [entriesLoaded, setEntriesLoaded] = useState(false);
@@ -329,6 +311,10 @@ export default function DailyNine() {
 
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
   const [editingDate, setEditingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+
+  const [showUsernamePrompt, setShowUsernamePrompt] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
+  
 
 
   // auto time tracking for today view
@@ -456,14 +442,24 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
   if (!userDoc.exists() && user?.email) {
     await setDoc(userDocRef, {
       email: user.email,
+      username: null, 
       tasks: [],
       friends: [],
       pendingRequests: [],
       createdAt: serverTimestamp()
     });
-  } else if (userDoc.exists() && user?.email && !userDoc.data().email) {
+    setShowUsernamePrompt(true);
+    
+  } else if (userDoc.exists()) {
+    // check if username exists
+    if (!userDoc.data().username) {
+      setShowUsernamePrompt(true);
+    }
+    
     // backfill email if missing
-    await updateDoc(userDocRef, { email: user.email });
+    if (user?.email && !userDoc.data().email) {
+      await updateDoc(userDocRef, { email: user.email });
+    }
   }
   
   const entryRef = doc(db, 'users', uid, 'entries', targetDate);
@@ -846,12 +842,87 @@ const loadEntries = async () => {
   }
 };
 
+const loadLeaderboard = async () => {
+  try {
+    const usersRef = collection(db, 'users');
+    const snapshot = await getDocs(usersRef);
+    
+    const today = new Date().toISOString().split('T')[0];
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+    
+    const users = await Promise.all(
+      snapshot.docs.map(async (userDoc) => {
+        const userData = userDoc.data();
+        const entriesRef = collection(db, 'users', userDoc.id, 'entries');
+        const entriesSnap = await getDocs(entriesRef);
+        
+        let totalCompleted = 0;
+        let weekCompleted = 0;
+        let todayCompleted = 0;
+        let perfectDays = 0;
+        let totalDays = 0;
+        
+        entriesSnap.forEach(entry => {
+          const data = entry.data();
+          const entryDate = entry.id;
+          
+          // count for all time
+          totalCompleted += data.completedCount || 0;
+          totalDays++;
+          
+          if (data.completedCount === 9) perfectDays++;
+          
+          // count for this week
+          if (entryDate >= weekAgo) {
+            weekCompleted += data.completedCount || 0;
+          }
+          
+          // count for today
+          if (entryDate === today) {
+            todayCompleted = data.completedCount || 0;
+          }
+        });
+        
+        return {
+          uid: userDoc.id,
+          username: userData.username || userData.email || 'anonymous',
+          totalCompleted: leaderboardTab === 'today' ? todayCompleted : weekCompleted,
+          perfectDays,
+          totalDays,
+          avgPerDay: totalDays > 0 ? (totalCompleted / totalDays).toFixed(1) : 0
+        };
+      })
+    );
+    
+    // sort by total completed descending
+    users.sort((a, b) => {
+      if (b.totalCompleted !== a.totalCompleted) {
+        return b.totalCompleted - a.totalCompleted;
+      }
+      return b.perfectDays - a.perfectDays;
+    });
+    
+    setLeaderboardData(users);
+    setLeaderboardLoaded(true);
+    setLastLeaderboardUpdate(new Date());
+  } catch (err) {
+    console.error('leaderboard load failed:', err);
+  }
+};
+
 // trigger load when viewing history
 useEffect(() => {
   if (view === 'history' && user && !entriesLoaded) {
     loadEntries();
   }
 }, [view, user, entriesLoaded]);
+
+useEffect(() => {
+  if (view === 'leaderboard' && user) {
+    setLeaderboardLoaded(false);
+    loadLeaderboard();
+  }
+}, [view, user, leaderboardTab]);
 
   // auth handlers
 const handleSignIn = async () => {
@@ -1102,13 +1173,45 @@ const addRoutineTasks = (routineType: 'morning' | 'night') => {
   };
 
   const completedCount = tasks.filter(t => t.completed).length;
+  const prevCompletedRef = useRef(completedCount);
 
-  useEffect(() => {
-    if (completedCount === 9 && tasks.length >= 9) {
-      setShowConfetti(true);
-      setTimeout(() => setShowConfetti(false), 4000);
-    }
-  }, [completedCount, tasks.length]);
+useEffect(() => {
+  const today = new Date().toISOString().split('T')[0];
+  
+  // only fire if we JUST hit 9 (went from 8->9, not already at 9)
+  if (
+    completedCount === 9 && 
+    prevCompletedRef.current === 8 &&
+    tasks.length >= 9 && 
+    editingDate === today
+  ) {
+    const duration = 3000;
+    const animationEnd = Date.now() + duration;
+
+    const interval = setInterval(() => {
+      const timeLeft = animationEnd - Date.now();
+      
+      if (timeLeft <= 0) {
+        return clearInterval(interval);
+      }
+
+      const particleCount = 50 * (timeLeft / duration);
+      
+      confetti({
+        particleCount,
+        startVelocity: 30,
+        spread: 360,
+        origin: {
+          x: Math.random(),
+          y: Math.random() - 0.2
+        }
+      });
+    }, 250);
+  }
+  
+  // update ref for next render
+  prevCompletedRef.current = completedCount;
+}, [completedCount, tasks.length, editingDate]);
 
 
 useEffect(() => {
@@ -1213,8 +1316,6 @@ useEffect(() => {
           ))}
         </div>
 
-        <Confetti show={showConfetti} />
-
         <div style={{
           position: 'relative',
           zIndex: 2,
@@ -1297,6 +1398,19 @@ useEffect(() => {
                     transition: 'all 0.3s'
                   }}>
                   <Calendar size={20} />
+                </button>
+                <button
+                  onClick={() => setView('leaderboard')}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    borderRadius: '8px',
+                    background: view === 'leaderboard' ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)',
+                    color: 'white',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s'
+                  }}>
+                  <Trophy size={20} />
                 </button>
                 <button
                   onClick={() => setView('settings')}
@@ -1958,6 +2072,305 @@ useEffect(() => {
             </div>
           )}
 
+          {view === 'leaderboard' && (
+            <div style={{
+              background: 'rgba(255,255,255,0.9)',
+              backdropFilter: 'blur(15px) saturate(140%)',
+              borderRadius: '16px',
+              padding: '1.5rem',
+              maxWidth: '600px',
+              width: '100%'
+            }}>
+              <h2 style={{ 
+                color: '#1e293b', 
+                marginBottom: '1rem', 
+                marginTop: 0,
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'space-between'
+              }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Trophy size={24} /> leaderboard
+                </span>
+                <button
+                  onClick={() => {
+                    setLeaderboardLoaded(false);
+                    loadLeaderboard();
+                  }}
+                  style={{
+                    padding: '0.5rem',
+                    background: 'rgba(148, 163, 184, 0.15)',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    color: '#64748b',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                  <RefreshCw size={16} />
+                </button>
+              </h2>
+              
+              {/* tabs */}
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                <button
+                  onClick={() => setLeaderboardTab('today')}
+                  style={{
+                    flex: 1,
+                    padding: '0.5rem',
+                    background: leaderboardTab === 'today' ? 'rgba(255,255,255,0.6)' : 'rgba(148, 163, 184, 0.15)',
+                    color: leaderboardTab === 'today' ? '#1e293b' : '#64748b',
+                    border: leaderboardTab === 'today' ? '1px solid rgba(148, 163, 184, 0.3)' : 'none',
+                    borderRadius: '8px',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    boxShadow: leaderboardTab === 'today' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none'
+                  }}>
+                  today
+                </button>
+                <button
+                  onClick={() => setLeaderboardTab('week')}
+                  style={{
+                    flex: 1,
+                    padding: '0.5rem',
+                    background: leaderboardTab === 'week' ? 'rgba(255,255,255,0.6)' : 'rgba(148, 163, 184, 0.15)',
+                    color: leaderboardTab === 'week' ? '#1e293b' : '#64748b',
+                    border: leaderboardTab === 'week' ? '1px solid rgba(148, 163, 184, 0.3)' : 'none',
+                    borderRadius: '8px',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    boxShadow: leaderboardTab === 'week' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none'
+                  }}>
+                  this week
+                </button>
+              </div>
+
+              {leaderboardData.length === 0 ? (
+                <p style={{ color: '#64748b', fontSize: '0.9rem', textAlign: 'center', padding: '2rem 0' }}>
+                  {leaderboardLoaded ? 'no users yet' : 'loading...'}
+                </p>
+              ) : (
+                <>
+                  {/* podium - top 3 */}
+                  <div style={{ marginBottom: '1.5rem' }}>
+                    {leaderboardData.slice(0, 3).map((u, idx) => {
+                      const trophyColors = ['#FFD700', '#C0C0C0', '#CD7F32'];
+                      const trophyColor = trophyColors[idx];
+                      const isUser = u.uid === user?.uid;
+                      const isWinner = idx === 0;
+                      
+                      return (
+                        <div
+                          key={u.uid}
+                          style={{
+                            background: isWinner 
+                              ? 'rgba(255, 253, 245, 0.95)'  // warm cream instead of yellow tint
+                              : 'rgba(255,255,255,0.95)',
+                            backdropFilter: 'blur(15px) saturate(140%)',
+                            borderRadius: '16px',
+                            padding: isWinner ? '1.25rem' : '1rem',
+                            marginBottom: '0.75rem',
+                            boxShadow: isWinner
+                              ? '0 12px 40px rgba(255, 215, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.6)' 
+                              : 'inset 0 1px 0 rgba(255,255,255,0.5), 0 4px 16px rgba(100, 116, 139, 0.15)',
+                            border: isWinner ? '2px solid rgba(255, 215, 0, 0.4)' : '1px solid rgba(148, 163, 184, 0.2)',
+                            transform: isWinner ? 'scale(1.03)' : 'scale(1)',
+                            transition: 'all 0.2s',
+                            position: 'relative',
+                            overflow: 'hidden'
+                          }}>
+                          {isWinner && (
+                            <>
+                              <div style={{
+                                position: 'absolute',
+                                top: '12px',
+                                right: '12px',
+                                width: '4px',
+                                height: '4px',
+                                background: 'radial-gradient(circle, rgba(255,255,255,0.9) 0%, rgba(255,215,0,0.4) 50%, transparent 70%)',
+                                borderRadius: '50%',
+                                boxShadow: '0 0 8px rgba(255,215,0,0.6)',
+                                animation: 'pulse 3s ease-in-out infinite'
+                              }} />
+                              <div style={{
+                                position: 'absolute',
+                                top: '20px',
+                                right: '25px',
+                                width: '3px',
+                                height: '3px',
+                                background: 'radial-gradient(circle, rgba(255,255,255,0.8) 0%, rgba(255,215,0,0.3) 50%, transparent 70%)',
+                                borderRadius: '50%',
+                                boxShadow: '0 0 6px rgba(255,215,0,0.5)',
+                                animation: 'pulse 3s ease-in-out infinite',
+                                animationDelay: '0.5s'
+                              }} />
+                              <div style={{
+                                position: 'absolute',
+                                bottom: '15px',
+                                left: '15px',
+                                width: '3px',
+                                height: '3px',
+                                background: 'radial-gradient(circle, rgba(255,255,255,0.8) 0%, rgba(255,215,0,0.3) 50%, transparent 70%)',
+                                borderRadius: '50%',
+                                boxShadow: '0 0 6px rgba(255,215,0,0.5)',
+                                animation: 'pulse 3s ease-in-out infinite',
+                                animationDelay: '1s'
+                              }} />
+                            </>
+                          )}
+                          
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
+                            <div style={{
+                              width: isWinner ? '56px' : '48px',
+                              height: isWinner ? '56px' : '48px',
+                              borderRadius: '50%',
+                              background: isWinner 
+                                ? 'linear-gradient(135deg, rgba(255, 215, 0, 0.2), rgba(255, 193, 7, 0.15))'
+                                : 'rgba(148, 163, 184, 0.1)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              border: isWinner ? '2px solid rgba(255, 215, 0, 0.3)' : '1px solid rgba(148, 163, 184, 0.15)',
+                              boxShadow: isWinner ? '0 4px 12px rgba(255, 215, 0, 0.3)' : 'none'
+                            }}>
+                              <Trophy 
+                                size={isWinner ? 32 : 28} 
+                                color={trophyColor} 
+                                fill={trophyColor} 
+                                strokeWidth={1.5} 
+                              />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ 
+                                fontWeight: isWinner ? 800 : 700, 
+                                color: '#1e293b', 
+                                fontSize: isWinner ? '1.1rem' : '1rem',
+                                letterSpacing: isWinner ? '-0.02em' : 'normal'
+                              }}>
+                                {u.username}
+                                {isUser && ' (you)'}
+                              </div>
+                              <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.25rem' }}>
+                                {u.totalCompleted} tasks • {u.perfectDays}🔥 perfect days
+                              </div>
+                              <div style={{
+                                marginTop: '0.5rem',
+                                height: isWinner ? '8px' : '6px',
+                                background: 'rgba(148, 163, 184, 0.15)',
+                                borderRadius: '4px',
+                                overflow: 'hidden'
+                              }}>
+                                <div style={{
+                                  height: '100%',
+                                  width: `${Math.min((u.totalCompleted / (leaderboardData[0]?.totalCompleted || 1)) * 100, 100)}%`,
+                                  background: isWinner
+                                    ? 'linear-gradient(90deg, #FFD700, #FFA500)'
+                                    : 'linear-gradient(90deg, #3b82f6, #8b5cf6)',
+                                  borderRadius: '4px',
+                                  transition: 'width 0.3s ease',
+                                  boxShadow: isWinner ? '0 2px 8px rgba(255, 215, 0, 0.4)' : 'none'
+                                }} />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* rest of leaderboard */}
+                  {leaderboardData.length > 3 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {leaderboardData.slice(3).map((u, idx) => {
+                        const actualIdx = idx + 3;
+                        const isUser = u.uid === user?.uid;
+                        const maxTasks = leaderboardData[0]?.totalCompleted || 1;
+                        
+                        return (
+                          <div
+                            key={u.uid}
+                            style={{
+                              padding: '0.75rem',
+                              background: 'rgba(148, 163, 184, 0.08)',
+                              borderRadius: '8px',
+                              border: '1px solid rgba(148, 163, 184, 0.15)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.75rem',
+                              transition: 'all 0.2s'
+                            }}>
+                            <div style={{
+                              minWidth: '32px',
+                              height: '32px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontWeight: 700,
+                              color: '#64748b',
+                              fontSize: '0.9rem',
+                              background: 'rgba(148, 163, 184, 0.15)',
+                              borderRadius: '6px'
+                            }}>
+                              #{actualIdx + 1}
+                            </div>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.9rem' }}>
+                                {u.username}
+                                {isUser && ' (you)'}
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
+                                {u.totalCompleted} tasks • {u.perfectDays}🔥 perfect • {u.avgPerDay} avg/day
+                              </div>
+                              <div style={{
+                                marginTop: '0.5rem',
+                                height: '4px',
+                                background: 'rgba(148, 163, 184, 0.15)',
+                                borderRadius: '2px',
+                                overflow: 'hidden'
+                              }}>
+                                <div style={{
+                                  height: '100%',
+                                  width: `${(u.totalCompleted / maxTasks) * 100}%`,
+                                  background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)',
+                                  borderRadius: '2px',
+                                  transition: 'width 0.3s ease'
+                                }} />
+                              </div>
+                              {actualIdx > 0 && (
+                                <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.25rem' }}>
+                                  {leaderboardData[0].totalCompleted - u.totalCompleted} behind #1
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {lastLeaderboardUpdate && (
+                    <div style={{
+                      marginTop: '1rem',
+                      padding: '0.5rem',
+                      background: 'rgba(148, 163, 184, 0.08)',
+                      borderRadius: '6px',
+                      fontSize: '0.7rem',
+                      color: '#94a3b8',
+                      textAlign: 'center'
+                    }}>
+                      last updated {Math.floor((Date.now() - lastLeaderboardUpdate.getTime()) / 60000)} mins ago
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}     
+
 
           {view === 'settings' && (
             <div style={{
@@ -2275,6 +2688,76 @@ useEffect(() => {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {showUsernamePrompt && (
+            <div style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.5)',
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1000
+            }}>
+              <div style={{
+                background: 'white',
+                borderRadius: '16px',
+                padding: '2rem',
+                maxWidth: '400px',
+                width: '90%',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+              }}>
+                <h2 style={{ color: '#1e293b', marginTop: 0, marginBottom: '0.5rem' }}>choose a username</h2>
+                <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                  this will be displayed on the leaderboard
+                </p>
+                <input
+                  type="text"
+                  value={usernameInput}
+                  onChange={e => setUsernameInput(e.target.value)}
+                  placeholder="enter username..."
+                  maxLength={20}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '8px',
+                    fontSize: '0.9rem',
+                    marginBottom: '1rem',
+                    outline: 'none'
+                  }}
+                />
+                <button
+                  onClick={async () => {
+                    if (!usernameInput.trim() || !user) return;
+                    try {
+                      await updateDoc(doc(db, 'users', user.uid), {
+                        username: usernameInput.trim()
+                      });
+                      setShowUsernamePrompt(false);
+                      setUsernameInput('');
+                    } catch (err) {
+                      console.error('failed to save username:', err);
+                    }
+                  }}
+                  disabled={!usernameInput.trim()}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    background: usernameInput.trim() ? '#1e293b' : '#cbd5e1',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '0.9rem',
+                    fontWeight: 600,
+                    cursor: usernameInput.trim() ? 'pointer' : 'not-allowed'
+                  }}>
+                  save
+                </button>
+              </div>
             </div>
           )}
           </div>
