@@ -467,12 +467,11 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
 
   let loadedTasks: any[] = [];
 
-  if (entryDoc.exists()) {
-    loadedTasks = entryDoc.data().tasks || [];
-  } else if (userDoc.exists() && targetDate === new Date().toISOString().split('T')[0]) {
-    // only fall back to user doc if viewing today
-    loadedTasks = userDoc.data().tasks || [];
-  }
+if (entryDoc.exists()) {
+  loadedTasks = entryDoc.data().tasks || [];
+} else {
+  loadedTasks = [];
+}
 
   if (loadedTasks && loadedTasks.length > 0) {
     setTasks(loadedTasks);
@@ -638,9 +637,6 @@ const checkRollover = async (uid: string) => {
       { merge: true }
     );
 
-    // also update user base doc for backwards compat
-    await updateDoc(doc(db, 'users', uid), { tasks: todayTasks });
-
     console.log(`[ROLLOVER] SUCCESS: auto-rolled ${rolled.length} tasks from ${lastEntryId} to ${today}`);
   } catch (error) {
     console.error('[ROLLOVER] ERROR:', error);
@@ -713,9 +709,6 @@ const manualRollover = async () => {
       totalTasks: cleaned.length,
       rolloverApplied: true  // mark as rolled so auto rollover skips it tomorrow
     });
-
-    // sync to base user doc
-    await updateDoc(doc(db, "users", user.uid), { tasks: cleaned });
 
     setTasks(cleaned);
     alert(`rolled ${rolled.length} task${rolled.length > 1 ? "s" : ""} to tomorrow`);
@@ -802,7 +795,6 @@ useEffect(() => {
     
     if (editingDate === today) {
       await updateDoc(doc(db, 'users', user.uid), {
-        tasks,
         homeSection,
         manualOverride,
         morningRoutine,
@@ -1212,31 +1204,6 @@ useEffect(() => {
   // update ref for next render
   prevCompletedRef.current = completedCount;
 }, [completedCount, tasks.length, editingDate]);
-
-
-useEffect(() => {
-  if (!user) return;
-  let lastDate = new Date().toISOString().split("T")[0];
-  const interval = setInterval(async () => {
-    const currentDate = new Date().toISOString().split("T")[0];
-    if (currentDate !== lastDate) {
-      const yesterdayRef = doc(db, "users", user.uid, "entries", lastDate);
-      const snapTasks = tasks; // use closure to keep up to date
-      await setDoc(
-        yesterdayRef,
-        {
-          tasks: snapTasks,
-          completedCount: snapTasks.filter(t => t.completed).length,
-          totalTasks: snapTasks.length,
-          timestamp: serverTimestamp()
-        },
-        { merge: true }
-      );
-      lastDate = currentDate;
-    }
-  }, 60000);
-  return () => clearInterval(interval);
-}, [user, tasks]);
 
 
   const addTask = () => {
