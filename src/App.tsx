@@ -311,6 +311,9 @@ export default function DailyNine() {
 
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
   const [editingDate, setEditingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+
+  const [showUsernamePrompt, setShowUsernamePrompt] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
   
 
 
@@ -439,14 +442,24 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
   if (!userDoc.exists() && user?.email) {
     await setDoc(userDocRef, {
       email: user.email,
+      username: null, 
       tasks: [],
       friends: [],
       pendingRequests: [],
       createdAt: serverTimestamp()
     });
-  } else if (userDoc.exists() && user?.email && !userDoc.data().email) {
+    setShowUsernamePrompt(true);
+    
+  } else if (userDoc.exists()) {
+    // check if username exists
+    if (!userDoc.data().username) {
+      setShowUsernamePrompt(true);
+    }
+    
     // backfill email if missing
-    await updateDoc(userDocRef, { email: user.email });
+    if (user?.email && !userDoc.data().email) {
+      await updateDoc(userDocRef, { email: user.email });
+    }
   }
   
   const entryRef = doc(db, 'users', uid, 'entries', targetDate);
@@ -872,7 +885,7 @@ const loadLeaderboard = async () => {
         
         return {
           uid: userDoc.id,
-          email: userData.email || 'anonymous',
+          username: userData.username || userData.email || 'anonymous',
           totalCompleted: leaderboardTab === 'today' ? todayCompleted : weekCompleted,
           perfectDays,
           totalDays,
@@ -2239,7 +2252,7 @@ useEffect(() => {
                                 fontSize: isWinner ? '1.1rem' : '1rem',
                                 letterSpacing: isWinner ? '-0.02em' : 'normal'
                               }}>
-                                {u.email}
+                                {u.username}
                                 {isUser && ' (you)'}
                               </div>
                               <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.25rem' }}>
@@ -2307,7 +2320,7 @@ useEffect(() => {
                             </div>
                             <div style={{ flex: 1 }}>
                               <div style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.9rem' }}>
-                                {u.email}
+                                {u.username}
                                 {isUser && ' (you)'}
                               </div>
                               <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
@@ -2675,6 +2688,76 @@ useEffect(() => {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {showUsernamePrompt && (
+            <div style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.5)',
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1000
+            }}>
+              <div style={{
+                background: 'white',
+                borderRadius: '16px',
+                padding: '2rem',
+                maxWidth: '400px',
+                width: '90%',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+              }}>
+                <h2 style={{ color: '#1e293b', marginTop: 0, marginBottom: '0.5rem' }}>choose a username</h2>
+                <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                  this will be displayed on the leaderboard
+                </p>
+                <input
+                  type="text"
+                  value={usernameInput}
+                  onChange={e => setUsernameInput(e.target.value)}
+                  placeholder="enter username..."
+                  maxLength={20}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '8px',
+                    fontSize: '0.9rem',
+                    marginBottom: '1rem',
+                    outline: 'none'
+                  }}
+                />
+                <button
+                  onClick={async () => {
+                    if (!usernameInput.trim() || !user) return;
+                    try {
+                      await updateDoc(doc(db, 'users', user.uid), {
+                        username: usernameInput.trim()
+                      });
+                      setShowUsernamePrompt(false);
+                      setUsernameInput('');
+                    } catch (err) {
+                      console.error('failed to save username:', err);
+                    }
+                  }}
+                  disabled={!usernameInput.trim()}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    background: usernameInput.trim() ? '#1e293b' : '#cbd5e1',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '0.9rem',
+                    fontWeight: 600,
+                    cursor: usernameInput.trim() ? 'pointer' : 'not-allowed'
+                  }}>
+                  save
+                </button>
+              </div>
             </div>
           )}
           </div>
