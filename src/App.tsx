@@ -2078,8 +2078,6 @@ useEffect(() => {
               backdropFilter: 'blur(15px) saturate(140%)',
               borderRadius: '16px',
               padding: '1.5rem',
-              maxWidth: '600px',
-              width: '100%'
             }}>
               <h2 style={{ 
                 color: '#1e293b', 
