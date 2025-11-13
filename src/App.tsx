@@ -310,7 +310,7 @@ export default function DailyNine() {
   void viewingFriend;
 
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
-  const [editingDate, setEditingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [editingDate, setEditingDate] = useState<string>(() => getLocalDateString());
 
   const [showUsernamePrompt, setShowUsernamePrompt] = useState(false);
   const [usernameInput, setUsernameInput] = useState('');
@@ -403,7 +403,7 @@ useEffect(() => {
 
       if (firebaseUser) {
         setUser(firebaseUser);
-        setEditingDate(new Date().toISOString().split('T')[0]);
+        setEditingDate(getLocalDateString());
         loadUserData(firebaseUser.uid)
           .then(() => {
             setView('today');
@@ -432,9 +432,17 @@ useEffect(() => {
   };
 }, []);
 
+const getLocalDateString = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 
 const loadUserData = async (uid: string, dateToLoad?: string) => {
-  const targetDate = dateToLoad || new Date().toISOString().split('T')[0];
+  const targetDate = dateToLoad || getLocalDateString();
   const userDocRef = doc(db, 'users', uid);
   const userDoc = await getDoc(userDocRef);
   
@@ -480,7 +488,7 @@ if (entryDoc.exists()) {
   }
 
   // only check rollover if loading today
-  if (targetDate === new Date().toISOString().split('T')[0]) {
+  if (targetDate === getLocalDateString()) {
     await checkRollover(uid);
     
     // reload today's tasks after rollover
@@ -494,7 +502,7 @@ if (entryDoc.exists()) {
     setNightRoutine(data.nightRoutine || []);
     
     // add routine tasks immediately after loading if viewing today
-    if (targetDate === new Date().toISOString().split('T')[0]) {
+    if (targetDate === getLocalDateString()) {
       const morning = data.morningRoutine || [];
       const night = data.nightRoutine || [];
       
@@ -530,7 +538,7 @@ if (entryDoc.exists()) {
 
 const checkRollover = async (uid: string) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     
     console.log('[ROLLOVER] checking rollover', { today, uid });
 
@@ -736,7 +744,7 @@ const existingTitles = existingTasks.map((t: { title: string }) => t.title);
 
 const backToToday = () => {
   if (!user) return;
-  const today = new Date().toISOString().split('T')[0];
+  const today = getLocalDateString();
   setEditingDate(today);
   loadUserData(user.uid);
 };
@@ -762,7 +770,7 @@ useEffect(() => {
   if (!user || loading) return;
   
   const timeoutId = setTimeout(async () => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     
     const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
     await setDoc(entryRef, {
@@ -798,7 +806,7 @@ const loadEntries = async () => {
     const entriesRef = collection(db, 'users', user.uid, 'entries');
     const q = query(entriesRef, orderBy('timestamp', 'desc'), limit(30));
     const snapshot = await getDocs(q);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     const data = snapshot.docs
       .filter(d => d.id !== today)
       .map(d => ({
@@ -818,7 +826,7 @@ const loadLeaderboard = async () => {
     const usersRef = collection(db, 'users');
     const snapshot = await getDocs(usersRef);
     
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
     
     const users = await Promise.all(
@@ -1025,7 +1033,7 @@ const handleSignIn = async () => {
     if (!user) return;
     
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       const entryRef = doc(db, 'users', friendUid, 'entries', today);
       const entrySnap = await getDoc(entryRef);
       
@@ -1135,7 +1143,7 @@ const addRoutineTasks = (routineType: 'morning' | 'night') => {
     if (newView === 'home') {
       transitionToSection(homeSection);
     } else if (newView === 'today') {
-      setEditingDate(new Date().toISOString().split('T')[0]); // reset to actual today
+      setEditingDate(getLocalDateString()); // reset to actual today
       transitionToSection(manualOverride || autoTimeSection);
       if (user) {
         loadUserData(user.uid); // reload today's data
@@ -1147,7 +1155,7 @@ const addRoutineTasks = (routineType: 'morning' | 'night') => {
   const prevCompletedRef = useRef(completedCount);
 
 useEffect(() => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = getLocalDateString();
   
   // only fire if we JUST hit 9 (went from 8->9, not already at 9)
   if (
@@ -1733,7 +1741,7 @@ useEffect(() => {
               }}>
 
                 <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
-      {editingDate === new Date().toISOString().split('T')[0] ? (
+      {editingDate === getLocalDateString() ? (
         <>
           <button
             onClick={manualRollover}
@@ -1783,12 +1791,12 @@ useEffect(() => {
                 color: '#0f172a', 
                 marginBottom: '1rem', 
                 fontSize: '0.9rem',
-                fontWeight: editingDate !== new Date().toISOString().split('T')[0] ? 600 : 400,
-                background: editingDate !== new Date().toISOString().split('T')[0] ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
-                padding: editingDate !== new Date().toISOString().split('T')[0] ? '0.5rem 0.75rem' : '0',
+                fontWeight: editingDate !== getLocalDateString() ? 600 : 400,
+                background: editingDate !== getLocalDateString() ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
+                padding: editingDate !== getLocalDateString() ? '0.5rem 0.75rem' : '0',
                 borderRadius: '6px'
               }}>
-                {editingDate === new Date().toISOString().split('T')[0] 
+                {editingDate === getLocalDateString() 
                   ? `completed: ${completedCount}/9`
                   : `editing ${editingDate} - completed: ${completedCount}/9`
                 }
