@@ -484,14 +484,6 @@ if (entryDoc.exists()) {
     await checkRollover(uid);
     
     // reload today's tasks after rollover
-    const entryRefAfterRollover = doc(db, 'users', uid, 'entries', targetDate);
-    const entryDocAfterRollover = await getDoc(entryRefAfterRollover);
-    if (entryDocAfterRollover.exists()) {
-      const rolledTasks = entryDocAfterRollover.data().tasks || [];
-      if (rolledTasks.length > 0) {
-        setTasks(rolledTasks);
-      }
-    }
   }
 
   if (userDoc.exists()) {
@@ -503,47 +495,34 @@ if (entryDoc.exists()) {
     
     // add routine tasks immediately after loading if viewing today
     if (targetDate === new Date().toISOString().split('T')[0]) {
-      // need to wait for state to settle, then add routines
       const morning = data.morningRoutine || [];
       const night = data.nightRoutine || [];
       
       if (morning.length > 0 || night.length > 0) {
-        setTimeout(async () => {
-          const currentTasks = await getDoc(entryRef);
-          const existing = currentTasks.exists() ? (currentTasks.data().tasks || []) : [];
-          const existingTitles = existing.map((t: any) => t.title);
-          
-          const missingMorning = morning.filter((title: string) => !existingTitles.includes(title));
-          const missingNight = night.filter((title: string) => !existingTitles.includes(title));
-          
-          const newTasks = [
-            ...missingMorning.map((title: string) => ({
-              id: Date.now().toString() + Math.random().toString(36).slice(2),
-              title,
-              completed: false,
-              routineType: 'morning'
-            })),
-            ...missingNight.map((title: string) => ({
-              id: Date.now().toString() + Math.random().toString(36).slice(2),
-              title,
-              completed: false,
-              routineType: 'night'
-            }))
-          ];
-          
-          if (newTasks.length > 0) {
-            const updated = [...existing, ...newTasks];
-            setTasks(updated);
-            await setDoc(entryRef, {
-              tasks: updated,
-              completedCount: updated.filter((t: any) => t.completed).length,
-              totalTasks: updated.length,
-              morningRoutine: morning,
-              nightRoutine: night,
-              timestamp: serverTimestamp()
-            }, { merge: true });
-          }
-        }, 0);
+        const existingTitles = loadedTasks.map((t: any) => t.title);
+        
+        const missingMorning = morning.filter((title: string) => !existingTitles.includes(title));
+        const missingNight = night.filter((title: string) => !existingTitles.includes(title));
+        
+        const newTasks = [
+          ...missingMorning.map((title: string) => ({
+            id: Date.now().toString() + Math.random().toString(36).slice(2),
+            title,
+            completed: false,
+            routineType: 'morning'
+          })),
+          ...missingNight.map((title: string) => ({
+            id: Date.now().toString() + Math.random().toString(36).slice(2),
+            title,
+            completed: false,
+            routineType: 'night'
+          }))
+        ];
+        
+        if (newTasks.length > 0) {
+          loadedTasks = [...loadedTasks, ...newTasks];
+          // don't write to firestore here, let the save useEffect handle it
+        }
       }
     }
   }
