@@ -309,6 +309,14 @@ export default function DailyNine() {
   // viewingFriend only used internally
   void viewingFriend;
 
+  const getLocalDateString = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
   const [editingDate, setEditingDate] = useState<string>(() => getLocalDateString());
 
@@ -431,14 +439,6 @@ useEffect(() => {
     cleanupPromise.then(unsub => unsub?.());
   };
 }, []);
-
-const getLocalDateString = () => {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
 
 
 const loadUserData = async (uid: string, dateToLoad?: string) => {
