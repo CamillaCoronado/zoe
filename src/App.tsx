@@ -317,6 +317,24 @@ export default function DailyNine() {
   return `${year}-${month}-${day}`;
 };
 
+const getLocalTomorrow = () => {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getLocalWeekAgo = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 7);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
   const currentSection = view === 'home' ? homeSection : (manualOverride || autoTimeSection);
   const [editingDate, setEditingDate] = useState<string>(() => getLocalDateString());
 
@@ -635,8 +653,8 @@ const manualRollover = async () => {
   if (!user) return;
   
   try {
-    const today = new Date().toISOString().split("T")[0];
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+    const today = getLocalDateString();
+    const tomorrow = getLocalTomorrow();
 
     const todayRef = doc(db, "users", user.uid, "entries", today);
     const snap = await getDoc(todayRef);
@@ -708,7 +726,7 @@ const manualRollover = async () => {
 
 const planTomorrow = async () => {
   if (!user) return;
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+  const tomorrow = getLocalTomorrow();
   setEditingDate(tomorrow);
   
   // load tomorrow's existing tasks
@@ -827,7 +845,7 @@ const loadLeaderboard = async () => {
     const snapshot = await getDocs(usersRef);
     
     const today = getLocalDateString();
-    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+    const weekAgo = getLocalWeekAgo();
     
     const users = await Promise.all(
       snapshot.docs.map(async (userDoc) => {
