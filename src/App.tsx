@@ -285,7 +285,7 @@ export default function DailyNine() {
   const [manualOverride, setManualOverride] = useState<TimeSection | null>(null);
   const [layers, setLayers] = useState<{ id: string; bg: string; section: TimeSection | HomeSection; ready: boolean }[]>([]);
   const [contentVisible, setContentVisible] = useState<boolean>(true);
-  const [tasks, setTasks] = useState<{ id: string; title: string; completed: boolean; routineType: string | null }[]>([]);
+  const [tasks, setTasks] = useState<{ id: string; title: string; completed: boolean; routineType: string | null; skipped?: boolean }[]>([]);
   const [newTask, setNewTask] = useState('');
   const [morningRoutine, setMorningRoutine] = useState<string[]>([]);
   const [nightRoutine, setNightRoutine] = useState<string[]>([]);
@@ -477,12 +477,10 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
     setShowUsernamePrompt(true);
     
   } else if (userDoc.exists()) {
-    // check if username exists
     if (!userDoc.data().username) {
       setShowUsernamePrompt(true);
     }
     
-    // backfill email if missing
     if (user?.email && !userDoc.data().email) {
       await updateDoc(userDocRef, { email: user.email });
     }
@@ -491,25 +489,15 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
   const entryRef = doc(db, 'users', uid, 'entries', targetDate);
   const entryDoc = await getDoc(entryRef);
 
-  let loadedTasks: any[] = [];
-
-if (entryDoc.exists()) {
-  loadedTasks = entryDoc.data().tasks || [];
-} else {
-  loadedTasks = [];
-}
-
-  if (loadedTasks && loadedTasks.length > 0) {
-    setTasks(loadedTasks);
-  } else {
-    setTasks([]);
-  }
+  let loadedTasks: any[] = entryDoc.exists() ? (entryDoc.data().tasks || []) : [];
 
   // only check rollover if loading today
   if (targetDate === getLocalDateString()) {
     await checkRollover(uid);
     
-    // reload today's tasks after rollover
+    // reload entry after rollover
+    const refreshedEntry = await getDoc(entryRef);
+    loadedTasks = refreshedEntry.exists() ? (refreshedEntry.data().tasks || []) : [];
   }
 
   if (userDoc.exists()) {
@@ -519,39 +507,47 @@ if (entryDoc.exists()) {
     setMorningRoutine(data.morningRoutine || []);
     setNightRoutine(data.nightRoutine || []);
     
-    // add routine tasks immediately after loading if viewing today
-    if (targetDate === getLocalDateString()) {
-      const morning = data.morningRoutine || [];
-      const night = data.nightRoutine || [];
-      
-      if (morning.length > 0 || night.length > 0) {
-        const existingTitles = loadedTasks.map((t: any) => t.title);
-        
-        const missingMorning = morning.filter((title: string) => !existingTitles.includes(title));
-        const missingNight = night.filter((title: string) => !existingTitles.includes(title));
-        
-        const newTasks = [
-          ...missingMorning.map((title: string) => ({
-            id: Date.now().toString() + Math.random().toString(36).slice(2),
-            title,
-            completed: false,
-            routineType: 'morning'
-          })),
-          ...missingNight.map((title: string) => ({
-            id: Date.now().toString() + Math.random().toString(36).slice(2),
-            title,
-            completed: false,
-            routineType: 'night'
-          }))
-        ];
-        
-        if (newTasks.length > 0) {
-          loadedTasks = [...loadedTasks, ...newTasks];
-          // don't write to firestore here, let the save useEffect handle it
-        }
-      }
-    }
+    // sync routine tasks with settings
+    const morning = data.morningRoutine || [];
+    const night = data.nightRoutine || [];
+    
+    // find existing routine tasks in loaded tasks
+    const existingRoutineTasks = loadedTasks.filter((t: any) => t.routineType);
+    const existingRoutineTitles = existingRoutineTasks.map((t: any) => t.title);
+    
+    // tasks that should exist (from settings)
+    const shouldExistMorning = morning.map((title: string) => ({
+      title,
+      routineType: 'morning'
+    }));
+    const shouldExistNight = night.map((title: string) => ({
+      title,
+      routineType: 'night'
+    }));
+    const shouldExist = [...shouldExistMorning, ...shouldExistNight];
+    
+    // add missing routine tasks (new in settings)
+    const toAdd = shouldExist
+      .filter(s => !existingRoutineTitles.includes(s.title))
+      .map(s => ({
+        id: Date.now().toString() + Math.random().toString(36).slice(2),
+        title: s.title,
+        completed: false,
+        skipped: false,
+        routineType: s.routineType
+      }));
+    
+    // remove routine tasks that are no longer in settings
+    const shouldExistTitles = shouldExist.map(s => s.title);
+    loadedTasks = loadedTasks.filter((t: any) => 
+      !t.routineType || shouldExistTitles.includes(t.title)
+    );
+    
+    // merge
+    loadedTasks = [...loadedTasks, ...toAdd];
   }
+  
+  setTasks(loadedTasks);
 };
 
 const checkRollover = async (uid: string) => {
@@ -1047,26 +1043,35 @@ const handleSignIn = async () => {
     }
   };
   
-  const viewFriendTasks = async (friendUid: string) => {
-    if (!user) return;
+const viewFriendTasks = async (friendUid: string) => {
+  if (!user) return;
+  
+  try {
+    const today = getLocalDateString();
+    console.log('[FRIEND VIEW] looking for date:', today);
     
-    try {
-      const today = getLocalDateString();
-      const entryRef = doc(db, 'users', friendUid, 'entries', today);
-      const entrySnap = await getDoc(entryRef);
-      
-      if (entrySnap.exists()) {
-        setFriendTasks(entrySnap.data().tasks || []);
-      } else {
-        setFriendTasks([]);
-      }
-      
-      setViewingFriend(friendUid);
-      setView('friend');
-    } catch (err) {
-      console.error('failed to load friend tasks:', err);
+    // FIRST: check what dates actually exist for this friend
+    const entriesRef = collection(db, 'users', friendUid, 'entries');
+    const allEntries = await getDocs(entriesRef);
+    console.log('[FRIEND VIEW] available dates:', allEntries.docs.map(d => d.id));
+    
+    const entryRef = doc(db, 'users', friendUid, 'entries', today);
+    const entrySnap = await getDoc(entryRef);
+    
+    console.log('[FRIEND VIEW] found entry?', entrySnap.exists());
+    
+    if (entrySnap.exists()) {
+      setFriendTasks(entrySnap.data().tasks || []);
+    } else {
+      setFriendTasks([]);
     }
-  };
+    
+    setViewingFriend(friendUid);
+    setView('friend');
+  } catch (err) {
+    console.error('failed to load friend tasks:', err);
+  }
+};
 
   // load friend data when user loads
   useEffect(() => {
@@ -1233,6 +1238,12 @@ useEffect(() => {
   const deleteTask = (id: string) => {
     setTasks(tasks.filter(t => t.id !== id));
   };
+
+  const skipTask = (id: string) => {
+  setTasks(tasks.map(t =>
+    t.id === id ? { ...t, skipped: !t.skipped, completed: false } : t
+  ));
+};
 
   const cx = 100, cy = 100, radius = 80;
 
@@ -1861,12 +1872,14 @@ useEffect(() => {
                         gap: '0.75rem',
                         padding: '0.75rem',
                         borderRadius: '8px',
-                        background: 'rgba(0,0,0,0.02)',
-                        transition: 'background 0.2s'
+                        background: task.skipped ? 'rgba(0,0,0,0.01)' : 'rgba(0,0,0,0.02)',
+                        opacity: task.skipped ? 0.5 : 1,
+                        transition: 'all 0.2s'
                       }}>
                       <button
                         onClick={() => toggleTask(task.id)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                        disabled={task.skipped}
+                        style={{ background: 'none', border: 'none', cursor: task.skipped ? 'not-allowed' : 'pointer', padding: 0 }}>
                         {task.completed ? (
                           <CheckCircle2 size={24} color="#10b981" />
                         ) : (
@@ -1875,7 +1888,7 @@ useEffect(() => {
                       </button>
                       <span style={{
                         flex: 1,
-                        color: task.completed ? '#94a3b8' : '#0f172a',
+                        color: task.skipped ? '#cbd5e1' : task.completed ? '#94a3b8' : '#0f172a',
                         textDecoration: task.completed ? 'line-through' : 'none',
                         fontSize: '0.9rem'
                       }}>
@@ -1885,22 +1898,23 @@ useEffect(() => {
                         </span>
                       </span>
                       <button
-                        onClick={() => deleteTask(task.id)}
+                        onClick={() => skipTask(task.id)}
                         style={{
                           background: 'none',
                           border: 'none',
-                          color: '#ef4444',
+                          color: task.skipped ? '#3b82f6' : '#94a3b8',
                           cursor: 'pointer',
-                          fontSize: '0.8rem',
-                          opacity: 0.6,
-                          transition: 'opacity 0.2s'
+                          fontSize: '0.75rem',
+                          opacity: 0.8,
+                          transition: 'opacity 0.2s',
+                          padding: '0.25rem 0.5rem'
                         }}>
-                        delete
+                        {task.skipped ? 'unskip' : 'skip'}
                       </button>
                     </div>
                   ))}
 
-                  {/* non-routine tasks in middle */}
+                  {/* non-routine tasks stay same but add them here */}
                   {tasks.filter(t => !t.routineType).map(task => (
                     <div
                       key={task.id}
@@ -1956,12 +1970,14 @@ useEffect(() => {
                         gap: '0.75rem',
                         padding: '0.75rem',
                         borderRadius: '8px',
-                        background: 'rgba(0,0,0,0.02)',
-                        transition: 'background 0.2s'
+                        background: task.skipped ? 'rgba(0,0,0,0.01)' : 'rgba(0,0,0,0.02)',
+                        opacity: task.skipped ? 0.5 : 1,
+                        transition: 'all 0.2s'
                       }}>
                       <button
                         onClick={() => toggleTask(task.id)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                        disabled={task.skipped}
+                        style={{ background: 'none', border: 'none', cursor: task.skipped ? 'not-allowed' : 'pointer', padding: 0 }}>
                         {task.completed ? (
                           <CheckCircle2 size={24} color="#10b981" />
                         ) : (
@@ -1970,7 +1986,7 @@ useEffect(() => {
                       </button>
                       <span style={{
                         flex: 1,
-                        color: task.completed ? '#94a3b8' : '#0f172a',
+                        color: task.skipped ? '#cbd5e1' : task.completed ? '#94a3b8' : '#0f172a',
                         textDecoration: task.completed ? 'line-through' : 'none',
                         fontSize: '0.9rem'
                       }}>
@@ -1980,17 +1996,18 @@ useEffect(() => {
                         </span>
                       </span>
                       <button
-                        onClick={() => deleteTask(task.id)}
+                        onClick={() => skipTask(task.id)}
                         style={{
                           background: 'none',
                           border: 'none',
-                          color: '#ef4444',
+                          color: task.skipped ? '#3b82f6' : '#94a3b8',
                           cursor: 'pointer',
-                          fontSize: '0.8rem',
-                          opacity: 0.6,
-                          transition: 'opacity 0.2s'
+                          fontSize: '0.75rem',
+                          opacity: 0.8,
+                          transition: 'opacity 0.2s',
+                          padding: '0.25rem 0.5rem'
                         }}>
-                        delete
+                        {task.skipped ? 'unskip' : 'skip'}
                       </button>
                     </div>
                   ))}
