@@ -1050,7 +1050,6 @@ const viewFriendTasks = async (friendUid: string) => {
     const today = getLocalDateString();
     console.log('[FRIEND VIEW] looking for date:', today);
     
-    // FIRST: check what dates actually exist for this friend
     const entriesRef = collection(db, 'users', friendUid, 'entries');
     const allEntries = await getDocs(entriesRef);
     console.log('[FRIEND VIEW] available dates:', allEntries.docs.map(d => d.id));
@@ -1061,7 +1060,14 @@ const viewFriendTasks = async (friendUid: string) => {
     console.log('[FRIEND VIEW] found entry?', entrySnap.exists());
     
     if (entrySnap.exists()) {
-      setFriendTasks(entrySnap.data().tasks || []);
+      const tasks = entrySnap.data().tasks || [];
+      // sort: morning → regular → night (same as today view)
+      const sorted = [
+        ...tasks.filter((t: any) => t.routineType === 'morning'),
+        ...tasks.filter((t: any) => !t.routineType),
+        ...tasks.filter((t: any) => t.routineType === 'night')
+      ];
+      setFriendTasks(sorted);
     } else {
       setFriendTasks([]);
     }
