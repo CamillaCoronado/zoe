@@ -5,6 +5,114 @@ import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, ord
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
 import confetti from 'canvas-confetti';
+import { DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+function SortableTask({ task, onToggle, onDelete, onSkip }: { 
+  task: { id: string; title: string; completed: boolean; routineType: string | null; skipped?: boolean };
+  onToggle: () => void;
+  onDelete?: () => void;
+  onSkip?: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: task.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : (task.skipped ? 0.5 : 1)
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+    >
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.75rem',
+        padding: '0.75rem',
+        borderRadius: '8px',
+        background: task.skipped ? 'rgba(0,0,0,0.01)' : 'rgba(0,0,0,0.02)',
+        transition: 'background 0.2s',
+        cursor: 'grab',
+        touchAction: 'none'
+      }}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          disabled={task.skipped}
+          style={{ background: 'none', border: 'none', cursor: task.skipped ? 'not-allowed' : 'pointer', padding: 0 }}>
+          {task.completed ? (
+            <CheckCircle2 size={24} color="#10b981" />
+          ) : (
+            <Circle size={24} color="#cbd5e1" />
+          )}
+        </button>
+        <span style={{
+          flex: 1,
+          color: task.skipped ? '#cbd5e1' : task.completed ? '#94a3b8' : '#0f172a',
+          textDecoration: task.completed ? 'line-through' : 'none',
+          fontSize: '0.9rem'
+        }}>
+          {task.title}
+          {task.routineType && (
+            <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#94a3b8' }}>
+              ({task.routineType})
+            </span>
+          )}
+        </span>
+        {onSkip && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onSkip();
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: task.skipped ? '#3b82f6' : '#94a3b8',
+              cursor: 'pointer',
+              fontSize: '0.75rem',
+              opacity: 0.8,
+              padding: '0.25rem 0.5rem'
+            }}>
+            {task.skipped ? 'unskip' : 'skip'}
+          </button>
+        )}
+        {onDelete && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#ef4444',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              opacity: 0.6
+            }}>
+            delete
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 type TimeSection = 'morning' | 'afternoon' | 'evening' | 'night';
 type HomeSection = 'structure' | 'progression' | 'economy' | 'workflows' | 'community';
@@ -305,6 +413,28 @@ export default function DailyNine() {
   const [searchEmail, setSearchEmail] = useState('');
   const [viewingFriend, setViewingFriend] = useState<string | null>(null);
   const [friendTasks, setFriendTasks] = useState<any[]>([]);
+
+  const sensors = useSensors(
+  useSensor(PointerSensor),
+  useSensor(TouchSensor)
+);
+
+const handleDragEnd = (event: any) => {
+  const { active, over } = event;
+  
+  if (!over || active.id === over.id) return;
+  
+  setTasks((items) => {
+    const oldIndex = items.findIndex(t => t.id === active.id);
+    const newIndex = items.findIndex(t => t.id === over.id);
+    
+    const result = Array.from(items);
+    const [removed] = result.splice(oldIndex, 1);
+    result.splice(newIndex, 0, removed);
+    
+    return result;
+  });
+};
 
   // viewingFriend only used internally
   void viewingFriend;
@@ -1866,158 +1996,38 @@ useEffect(() => {
                     <Plus size={20} />
                   </button>
                 </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {/* morning tasks first */}
-                  {tasks.filter(t => t.routineType === 'morning').map(task => (
-                    <div
-                      key={task.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.75rem',
-                        padding: '0.75rem',
-                        borderRadius: '8px',
-                        background: task.skipped ? 'rgba(0,0,0,0.01)' : 'rgba(0,0,0,0.02)',
-                        opacity: task.skipped ? 0.5 : 1,
-                        transition: 'all 0.2s'
-                      }}>
-                      <button
-                        onClick={() => toggleTask(task.id)}
-                        disabled={task.skipped}
-                        style={{ background: 'none', border: 'none', cursor: task.skipped ? 'not-allowed' : 'pointer', padding: 0 }}>
-                        {task.completed ? (
-                          <CheckCircle2 size={24} color="#10b981" />
-                        ) : (
-                          <Circle size={24} color="#cbd5e1" />
-                        )}
-                      </button>
-                      <span style={{
-                        flex: 1,
-                        color: task.skipped ? '#cbd5e1' : task.completed ? '#94a3b8' : '#0f172a',
-                        textDecoration: task.completed ? 'line-through' : 'none',
-                        fontSize: '0.9rem'
-                      }}>
-                        {task.title}
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#94a3b8' }}>
-                          (morning)
-                        </span>
-                      </span>
-                      <button
-                        onClick={() => skipTask(task.id)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: task.skipped ? '#3b82f6' : '#94a3b8',
-                          cursor: 'pointer',
-                          fontSize: '0.75rem',
-                          opacity: 0.8,
-                          transition: 'opacity 0.2s',
-                          padding: '0.25rem 0.5rem'
-                        }}>
-                        {task.skipped ? 'unskip' : 'skip'}
-                      </button>
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {tasks.filter(t => t.routineType === 'morning').map(task => (
+                        <SortableTask
+                          key={task.id}
+                          task={task}
+                          onToggle={() => toggleTask(task.id)}
+                          onSkip={() => skipTask(task.id)}
+                        />
+                      ))}
+                      
+                      {tasks.filter(t => !t.routineType).map(task => (
+                        <SortableTask
+                          key={task.id}
+                          task={task}
+                          onToggle={() => toggleTask(task.id)}
+                          onDelete={() => deleteTask(task.id)}
+                        />
+                      ))}
+                      
+                      {tasks.filter(t => t.routineType === 'night').map(task => (
+                        <SortableTask
+                          key={task.id}
+                          task={task}
+                          onToggle={() => toggleTask(task.id)}
+                          onSkip={() => skipTask(task.id)}
+                        />
+                      ))}
                     </div>
-                  ))}
-
-                  {/* non-routine tasks stay same but add them here */}
-                  {tasks.filter(t => !t.routineType).map(task => (
-                    <div
-                      key={task.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.75rem',
-                        padding: '0.75rem',
-                        borderRadius: '8px',
-                        background: 'rgba(0,0,0,0.02)',
-                        transition: 'background 0.2s'
-                      }}>
-                      <button
-                        onClick={() => toggleTask(task.id)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                        {task.completed ? (
-                          <CheckCircle2 size={24} color="#10b981" />
-                        ) : (
-                          <Circle size={24} color="#cbd5e1" />
-                        )}
-                      </button>
-                      <span style={{
-                        flex: 1,
-                        color: task.completed ? '#94a3b8' : '#0f172a',
-                        textDecoration: task.completed ? 'line-through' : 'none',
-                        fontSize: '0.9rem'
-                      }}>
-                        {task.title}
-                      </span>
-                      <button
-                        onClick={() => deleteTask(task.id)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#ef4444',
-                          cursor: 'pointer',
-                          fontSize: '0.8rem',
-                          opacity: 0.6,
-                          transition: 'opacity 0.2s'
-                        }}>
-                        delete
-                      </button>
-                    </div>
-                  ))}
-
-                  {/* night tasks last */}
-                  {tasks.filter(t => t.routineType === 'night').map(task => (
-                    <div
-                      key={task.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.75rem',
-                        padding: '0.75rem',
-                        borderRadius: '8px',
-                        background: task.skipped ? 'rgba(0,0,0,0.01)' : 'rgba(0,0,0,0.02)',
-                        opacity: task.skipped ? 0.5 : 1,
-                        transition: 'all 0.2s'
-                      }}>
-                      <button
-                        onClick={() => toggleTask(task.id)}
-                        disabled={task.skipped}
-                        style={{ background: 'none', border: 'none', cursor: task.skipped ? 'not-allowed' : 'pointer', padding: 0 }}>
-                        {task.completed ? (
-                          <CheckCircle2 size={24} color="#10b981" />
-                        ) : (
-                          <Circle size={24} color="#cbd5e1" />
-                        )}
-                      </button>
-                      <span style={{
-                        flex: 1,
-                        color: task.skipped ? '#cbd5e1' : task.completed ? '#94a3b8' : '#0f172a',
-                        textDecoration: task.completed ? 'line-through' : 'none',
-                        fontSize: '0.9rem'
-                      }}>
-                        {task.title}
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#94a3b8' }}>
-                          (night)
-                        </span>
-                      </span>
-                      <button
-                        onClick={() => skipTask(task.id)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: task.skipped ? '#3b82f6' : '#94a3b8',
-                          cursor: 'pointer',
-                          fontSize: '0.75rem',
-                          opacity: 0.8,
-                          transition: 'opacity 0.2s',
-                          padding: '0.25rem 0.5rem'
-                        }}>
-                        {task.skipped ? 'unskip' : 'skip'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                  </SortableContext>
+                </DndContext>
 
                 {tasks.length === 0 && (
                   <p style={{ textAlign: 'center', color: '#94a3b8', padding: '2rem 0', fontSize: '0.9rem' }}>
