@@ -31,12 +31,7 @@ function SortableTask({ task, onToggle, onDelete, onSkip }: {
   };
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
-    >
+    <div ref={setNodeRef} style={style}>
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -44,15 +39,25 @@ function SortableTask({ task, onToggle, onDelete, onSkip }: {
         padding: '0.75rem',
         borderRadius: '8px',
         background: task.skipped ? 'rgba(0,0,0,0.01)' : 'rgba(0,0,0,0.02)',
-        transition: 'background 0.2s',
-        cursor: 'grab',
-        touchAction: 'none'
+        transition: 'background 0.2s'
       }}>
+        {/* drag handle */}
+        <div
+          {...attributes}
+          {...listeners}
+          style={{
+            cursor: 'grab',
+            padding: '0.25rem',
+            color: '#94a3b8',
+            fontSize: '1.2rem',
+            lineHeight: 1,
+            touchAction: 'none'
+          }}>
+          ⋮⋮
+        </div>
+        
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle();
-          }}
+          onClick={onToggle}
           disabled={task.skipped}
           style={{ background: 'none', border: 'none', cursor: task.skipped ? 'not-allowed' : 'pointer', padding: 0 }}>
           {task.completed ? (
@@ -76,10 +81,7 @@ function SortableTask({ task, onToggle, onDelete, onSkip }: {
         </span>
         {onSkip && (
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onSkip();
-            }}
+            onClick={onSkip}
             style={{
               background: 'none',
               border: 'none',
@@ -94,10 +96,7 @@ function SortableTask({ task, onToggle, onDelete, onSkip }: {
         )}
         {onDelete && (
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
+            onClick={onDelete}
             style={{
               background: 'none',
               border: 'none',
