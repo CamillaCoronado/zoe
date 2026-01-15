@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, RefreshCw, Users } from 'lucide-react';
 import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged, getRedirectResult } from 'firebase/auth';
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
 import confetti from 'canvas-confetti';
@@ -402,9 +402,11 @@ export default function DailyNine() {
   const [leaderboardLoaded, setLeaderboardLoaded] = useState(false);
   const [leaderboardTab, setLeaderboardTab] = useState<'today' | 'week'>('today');
   const [lastLeaderboardUpdate, setLastLeaderboardUpdate] = useState<Date | null>(null);
+  const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
 
   const [entries, setEntries] = useState<{date: string; completedCount: number; totalTasks: number;}[]>([]);
   const [entriesLoaded, setEntriesLoaded] = useState(false);
+  const [entriesError, setEntriesError] = useState<string | null>(null);
 
   // friend stuff
   const [friends, setFriends] = useState<string[]>([]);
@@ -470,8 +472,33 @@ const getLocalWeekAgo = () => {
   const [showUsernamePrompt, setShowUsernamePrompt] = useState(false);
   const [usernameInput, setUsernameInput] = useState('');
   
+  const latestStateRef = useRef({
+    tasks,
+    editingDate,
+    homeSection,
+    manualOverride,
+    morningRoutine,
+    nightRoutine,
+    user,
+    loading
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-
+  useEffect(() => {
+    latestStateRef.current = {
+      tasks,
+      editingDate,
+      homeSection,
+      manualOverride,
+      morningRoutine,
+      nightRoutine,
+      user,
+      loading
+    };
+  }, [tasks, editingDate, homeSection, manualOverride, morningRoutine, nightRoutine, user, loading]);
+  
   // auto time tracking for today view
   useEffect(() => {
     const interval = setInterval(() => {
@@ -690,22 +717,21 @@ const checkRollover = async (uid: string) => {
     
     console.log('[ROLLOVER] today exists?', todaySnap.exists(), 'tasks:', todaySnap.exists() ? (todaySnap.data().tasks || []).length : 0);
     
-    // skip if today already has tasks (means we already did rollover or user added tasks)
-    if (todaySnap.exists() && (todaySnap.data().tasks || []).length > 0) {
-      console.log('[ROLLOVER] skipping - today already has tasks');
+    // skip if today already has an entry (prevents unexpected mid-day resets)
+    if (todaySnap.exists()) {
+      console.log('[ROLLOVER] skipping - today already has an entry');
       return;
     }
 
     // find the LAST entry (most recent before today)
     const entriesRef = collection(db, 'users', uid, 'entries');
-    const q = query(entriesRef, orderBy('timestamp', 'desc'), limit(10));
-    const snapshot = await getDocs(q);
+    const snapshot = await getDocs(entriesRef);
     
     let lastEntry: any = null;
     let lastEntryId: string | null = null;
     
     snapshot.forEach(docSnap => {
-      if (docSnap.id < today && !lastEntry) {
+      if (docSnap.id < today && (!lastEntryId || docSnap.id > lastEntryId)) {
         lastEntry = docSnap.data();
         lastEntryId = docSnap.id;
       }
@@ -778,6 +804,7 @@ const manualRollover = async () => {
   if (!user) return;
   
   try {
+    await saveNow();
     const today = getLocalDateString();
     const tomorrow = getLocalTomorrow();
 
@@ -851,6 +878,7 @@ const manualRollover = async () => {
 
 const planTomorrow = async () => {
   if (!user) return;
+  await saveNow();
   const tomorrow = getLocalTomorrow();
   setEditingDate(tomorrow);
   
@@ -887,6 +915,7 @@ const existingTitles = existingTasks.map((t: { title: string }) => t.title);
 
 const backToToday = () => {
   if (!user) return;
+  void saveNow();
   const today = getLocalDateString();
   setEditingDate(today);
   loadUserData(user.uid);
@@ -894,6 +923,7 @@ const backToToday = () => {
 
 const viewPastEntry = async (date: string) => {
   if (!user) return;
+  await saveNow();
   setEditingDate(date);
   
   const entryRef = doc(db, 'users', user.uid, 'entries', date);
@@ -909,33 +939,67 @@ const viewPastEntry = async (date: string) => {
 };
 
 
-useEffect(() => {
-  if (!user || loading) return;
-  
-  const timeoutId = setTimeout(async () => {
-    const today = getLocalDateString();
-    
-    const entryRef = doc(db, 'users', user.uid, 'entries', editingDate);
+const saveNow = useCallback(async () => {
+  const state = latestStateRef.current;
+  if (!state.user || state.loading) return;
+
+  try {
+    setIsSaving(true);
+    const entryRef = doc(db, 'users', state.user.uid, 'entries', state.editingDate);
     await setDoc(entryRef, {
-      tasks,
-      completedCount: tasks.filter(t => t.completed).length,
-      totalTasks: tasks.length,
+      tasks: state.tasks,
+      completedCount: state.tasks.filter(t => t.completed).length,
+      totalTasks: state.tasks.length,
       timestamp: serverTimestamp()
     }, { merge: true });
-    
-    if (editingDate === today) {
-      await updateDoc(doc(db, 'users', user.uid), {
-        homeSection,
-        manualOverride,
-        morningRoutine,
-        nightRoutine,
+
+    if (state.editingDate === getLocalDateString()) {
+      await updateDoc(doc(db, 'users', state.user.uid), {
+        homeSection: state.homeSection,
+        manualOverride: state.manualOverride,
+        morningRoutine: state.morningRoutine,
+        nightRoutine: state.nightRoutine,
         updatedAt: serverTimestamp()
       });
     }
+    setLastSavedAt(new Date());
+    setSaveError(null);
+  } catch (err) {
+    console.error('save failed:', err);
+    setSaveError('failed to save — check your connection and try again');
+  } finally {
+    setIsSaving(false);
+  }
+}, []);
+
+useEffect(() => {
+  if (!user || loading) return;
+  
+  const timeoutId = setTimeout(() => {
+    void saveNow();
   }, 1000);
   
   return () => clearTimeout(timeoutId);
-}, [tasks, homeSection, manualOverride, morningRoutine, nightRoutine, user, loading, editingDate]);
+}, [tasks, homeSection, manualOverride, morningRoutine, nightRoutine, user, loading, editingDate, saveNow]);
+
+useEffect(() => {
+  const handlePageHide = () => {
+    void saveNow();
+  };
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'hidden') {
+      void saveNow();
+    }
+  };
+
+  window.addEventListener('pagehide', handlePageHide);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+
+  return () => {
+    window.removeEventListener('pagehide', handlePageHide);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+  };
+}, [saveNow]);
 
 useEffect(() => {
   if (!user) return;
@@ -944,11 +1008,12 @@ useEffect(() => {
 }, [autoTimeSection, user]);
 
 const loadEntries = async () => {
-  if (!user || entriesLoaded) return;
+  if (!user) return;
   try {
+    setEntriesError(null);
+    setEntriesLoaded(false);
     const entriesRef = collection(db, 'users', user.uid, 'entries');
-    const q = query(entriesRef, orderBy('timestamp', 'desc'), limit(30));
-    const snapshot = await getDocs(q);
+    const snapshot = await getDocs(entriesRef);
     const today = getLocalDateString();
     const data = snapshot.docs
       .filter(d => d.id !== today)
@@ -956,16 +1021,22 @@ const loadEntries = async () => {
         date: d.id,
         completedCount: d.data().completedCount,
         totalTasks: d.data().totalTasks
-      }));
+      }))
+      .sort((a, b) => (a.date < b.date ? 1 : -1));
     setEntries(data);
     setEntriesLoaded(true);
   } catch (err) {
     console.error('load entries failed:', err);
+    const message = err instanceof Error ? err.message : 'failed to load past entries';
+    setEntriesError(message);
+  } finally {
+    setEntriesLoaded(true);
   }
 };
 
 const loadLeaderboard = async () => {
   try {
+    setLeaderboardError(null);
     const usersRef = collection(db, 'users');
     const snapshot = await getDocs(usersRef);
     
@@ -1029,22 +1100,36 @@ const loadLeaderboard = async () => {
     setLastLeaderboardUpdate(new Date());
   } catch (err) {
     console.error('leaderboard load failed:', err);
+    setLeaderboardError('failed to load leaderboard');
+  } finally {
+    setLeaderboardLoaded(true);
   }
 };
 
 // trigger load when viewing history
 useEffect(() => {
-  if (view === 'history' && user && !entriesLoaded) {
+  if (view === 'history' && user) {
     loadEntries();
   }
-}, [view, user, entriesLoaded]);
+}, [view, user]);
 
 useEffect(() => {
   if (view === 'leaderboard' && user) {
     setLeaderboardLoaded(false);
+    setLeaderboardError(null);
     loadLeaderboard();
   }
 }, [view, user, leaderboardTab]);
+
+useEffect(() => {
+  setEntries([]);
+  setEntriesLoaded(false);
+  setEntriesError(null);
+  setLeaderboardData([]);
+  setLeaderboardLoaded(false);
+  setLeaderboardError(null);
+  setLastLeaderboardUpdate(null);
+}, [user]);
 
   // auth handlers
 const handleSignIn = async () => {
@@ -1297,6 +1382,9 @@ const addRoutineTasks = (routineType: 'morning' | 'night') => {
 };
   
   const handleViewChange = (newView: typeof view) => {
+    if (user) {
+      void saveNow();
+    }
     setView(newView);
     if (newView === 'home') {
       transitionToSection(homeSection);
@@ -1965,6 +2053,26 @@ useEffect(() => {
                   : `editing ${editingDate} - completed: ${completedCount}/9`
                 }
               </div>
+              <div style={{ 
+                color: '#64748b',
+                marginBottom: '1rem',
+                fontSize: '0.75rem'
+              }}>
+                {isSaving
+                  ? 'saving...'
+                  : lastSavedAt
+                    ? `last saved ${Math.max(0, Math.floor((Date.now() - lastSavedAt.getTime()) / 60000))}m ago`
+                    : 'not saved yet'}
+              </div>
+              {saveError && (
+                <div style={{
+                  color: '#ef4444',
+                  marginBottom: '1rem',
+                  fontSize: '0.75rem'
+                }}>
+                  {saveError}
+                </div>
+              )}
                 <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
                   <input
                     type="text"
@@ -2044,7 +2152,11 @@ useEffect(() => {
               padding: '1.5rem'
             }}>
               <h2 style={{ color: '#0f172a', marginBottom: '1rem' }}>past entries</h2>
-              {entries.length === 0 ? (
+              {entriesError ? (
+                <p style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                  {entriesError}
+                </p>
+              ) : entries.length === 0 ? (
                 <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
                   {entriesLoaded ? 'no entries yet.' : 'loading...'}
                 </p>
@@ -2153,8 +2265,8 @@ useEffect(() => {
               </div>
 
               {leaderboardData.length === 0 ? (
-                <p style={{ color: '#64748b', fontSize: '0.9rem', textAlign: 'center', padding: '2rem 0' }}>
-                  {leaderboardLoaded ? 'no users yet' : 'loading...'}
+                <p style={{ color: leaderboardError ? '#ef4444' : '#64748b', fontSize: '0.9rem', textAlign: 'center', padding: '2rem 0' }}>
+                  {leaderboardError || (leaderboardLoaded ? 'no users yet' : 'loading...')}
                 </p>
               ) : (
                 <>
