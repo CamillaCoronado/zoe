@@ -116,6 +116,304 @@ function SortableTask({ task, onToggle, onDelete, onSkip }: {
 type TimeSection = 'morning' | 'afternoon' | 'evening' | 'night';
 type HomeSection = 'structure' | 'progression' | 'economy' | 'workflows' | 'community';
 
+type DopamineTier = 'tiny' | 'easy' | 'feelsgood' | 'fun';
+
+interface DopamineTaskData {
+  id: string;
+  tier: DopamineTier;
+  flavorText: string;
+  metaphorStep: string;
+}
+
+interface DopamineMetaphor {
+  project: string;
+  emoji: string;
+  intro: string;
+  completionMessage: string;
+  buildSteps: { emoji: string; label: string }[];
+}
+
+interface DopaminePlan {
+  metaphor: DopamineMetaphor;
+  tasks: DopamineTaskData[];
+  generatedDate: string;
+  metaphorIndex: number;
+}
+
+const TIER_CONFIG: Record<DopamineTier, { emoji: string; label: string; tagline: string; color: string; bg: string; border: string }> = {
+  tiny: {
+    emoji: '🌱',
+    label: 'tiny',
+    tagline: 'urgency: clock is ticking',
+    color: '#16a34a',
+    bg: 'rgba(22,163,74,0.08)',
+    border: 'rgba(22,163,74,0.25)',
+  },
+  easy: {
+    emoji: '🌿',
+    label: 'easy wins',
+    tagline: 'novelty: something a little different',
+    color: '#0891b2',
+    bg: 'rgba(8,145,178,0.08)',
+    border: 'rgba(8,145,178,0.25)',
+  },
+  feelsgood: {
+    emoji: '🌸',
+    label: 'feels good after',
+    tagline: 'anticipatory: future-you will thank you',
+    color: '#db2777',
+    bg: 'rgba(219,39,119,0.08)',
+    border: 'rgba(219,39,119,0.25)',
+  },
+  fun: {
+    emoji: '✨',
+    label: 'fun',
+    tagline: 'passion: the interesting part',
+    color: '#7c3aed',
+    bg: 'rgba(124,58,237,0.08)',
+    border: 'rgba(124,58,237,0.25)',
+  },
+};
+
+const METAPHORS: DopamineMetaphor[] = [
+  {
+    project: 'Building a Perfect Sundae', emoji: '🍦',
+    intro: 'Every task is a topping — build it layer by layer.',
+    completionMessage: 'You built the whole sundae. Every layer counts.',
+    buildSteps: [
+      { emoji: '🫙', label: 'the bowl' },
+      { emoji: '🍨', label: 'vanilla scoop' },
+      { emoji: '🍓', label: 'strawberry layer' },
+      { emoji: '🍫', label: 'chocolate drizzle' },
+      { emoji: '🫐', label: 'berry topping' },
+      { emoji: '🥜', label: 'crunchy bits' },
+      { emoji: '🍒', label: 'the cherry' },
+    ],
+  },
+  {
+    project: 'Launching a Rocket', emoji: '🚀',
+    intro: 'Each task is a system check before liftoff.',
+    completionMessage: 'Houston, we have liftoff. Mission complete.',
+    buildSteps: [
+      { emoji: '🛢️', label: 'fuel loaded' },
+      { emoji: '🔧', label: 'systems checked' },
+      { emoji: '🗺️', label: 'trajectory set' },
+      { emoji: '🔋', label: 'power online' },
+      { emoji: '📡', label: 'comms confirmed' },
+      { emoji: '🧑‍🚀', label: 'crew ready' },
+      { emoji: '🚀', label: 'liftoff!' },
+    ],
+  },
+  {
+    project: 'Planting a Garden', emoji: '🌻',
+    intro: 'Every task seeds something that grows.',
+    completionMessage: 'Your garden is in full bloom. Beautiful work.',
+    buildSteps: [
+      { emoji: '🪣', label: 'soil ready' },
+      { emoji: '🌱', label: 'seeds planted' },
+      { emoji: '💧', label: 'first water' },
+      { emoji: '☀️', label: 'sunlight found' },
+      { emoji: '🌿', label: 'sprouts appear' },
+      { emoji: '🌼', label: 'buds forming' },
+      { emoji: '🌻', label: 'full bloom' },
+    ],
+  },
+  {
+    project: 'Brewing the Perfect Cup', emoji: '☕',
+    intro: 'Each task steeps the day to perfection.',
+    completionMessage: 'The perfect brew. Savour every drop.',
+    buildSteps: [
+      { emoji: '🫖', label: 'kettle on' },
+      { emoji: '💧', label: 'water heated' },
+      { emoji: '🍃', label: 'leaves measured' },
+      { emoji: '⏱️', label: 'steep timer set' },
+      { emoji: '🥛', label: 'milk warmed' },
+      { emoji: '🍯', label: 'honey ready' },
+      { emoji: '☕', label: 'perfect cup' },
+    ],
+  },
+  {
+    project: 'Assembling a Puzzle', emoji: '🧩',
+    intro: 'Every task snaps another piece into place.',
+    completionMessage: 'The full picture revealed. You did that.',
+    buildSteps: [
+      { emoji: '📦', label: 'pieces sorted' },
+      { emoji: '🔲', label: 'edges found' },
+      { emoji: '🧩', label: 'corners locked' },
+      { emoji: '🎨', label: 'colours grouped' },
+      { emoji: '🔍', label: 'details filling in' },
+      { emoji: '✨', label: 'almost there' },
+      { emoji: '🖼️', label: 'picture complete' },
+    ],
+  },
+  {
+    project: 'Painting a Canvas', emoji: '🎨',
+    intro: "Each task adds colour to today's masterpiece.",
+    completionMessage: "Step back and admire — that's your work.",
+    buildSteps: [
+      { emoji: '🖼️', label: 'canvas stretched' },
+      { emoji: '✏️', label: 'sketch laid down' },
+      { emoji: '🟦', label: 'background blocked in' },
+      { emoji: '🎨', label: 'colours mixed' },
+      { emoji: '🖌️', label: 'details painted' },
+      { emoji: '✨', label: 'highlights added' },
+      { emoji: '🌟', label: 'signed & done' },
+    ],
+  },
+  {
+    project: 'Baking a Cake', emoji: '🎂',
+    intro: "Each task is an ingredient in today's creation.",
+    completionMessage: 'The cake is baked. Time to celebrate.',
+    buildSteps: [
+      { emoji: '🧈', label: 'butter softened' },
+      { emoji: '🥚', label: 'eggs cracked' },
+      { emoji: '🌾', label: 'flour sifted' },
+      { emoji: '🍚', label: 'batter mixed' },
+      { emoji: '🔥', label: 'oven preheated' },
+      { emoji: '⏲️', label: 'baking away' },
+      { emoji: '🎂', label: 'frosted & ready' },
+    ],
+  },
+  {
+    project: 'Building a Campfire', emoji: '🔥',
+    intro: 'Each task feeds the flame.',
+    completionMessage: 'A roaring fire. You built it from scratch.',
+    buildSteps: [
+      { emoji: '🪨', label: 'ring of stones' },
+      { emoji: '🍂', label: 'tinder gathered' },
+      { emoji: '🪵', label: 'kindling stacked' },
+      { emoji: '🔥', label: 'spark caught' },
+      { emoji: '🪵', label: 'logs added' },
+      { emoji: '🌡️', label: 'heat rising' },
+      { emoji: '🔆', label: 'roaring fire' },
+    ],
+  },
+  {
+    project: 'Exploring a Map', emoji: '🗺️',
+    intro: 'Each task marks new territory conquered.',
+    completionMessage: 'All territories charted. Explorer status: unlocked.',
+    buildSteps: [
+      { emoji: '🧭', label: 'compass calibrated' },
+      { emoji: '👟', label: 'first steps taken' },
+      { emoji: '🏔️', label: 'terrain scouted' },
+      { emoji: '📍', label: 'waypoints marked' },
+      { emoji: '🌉', label: 'crossing made' },
+      { emoji: '⛺', label: 'camp set' },
+      { emoji: '🗺️', label: 'map complete' },
+    ],
+  },
+  {
+    project: 'Composing a Song', emoji: '🎵',
+    intro: "Each task adds a note to today's melody.",
+    completionMessage: 'The song is complete. Take a bow.',
+    buildSteps: [
+      { emoji: '🎸', label: 'instrument tuned' },
+      { emoji: '🎵', label: 'melody found' },
+      { emoji: '🥁', label: 'rhythm set' },
+      { emoji: '🎹', label: 'harmony added' },
+      { emoji: '🎤', label: 'lyrics written' },
+      { emoji: '🎚️', label: 'mixed & balanced' },
+      { emoji: '🎧', label: 'mastered & done' },
+    ],
+  },
+];
+
+const FLAVOR_TEXT: Record<DopamineTier, string[]> = {
+  tiny: [
+    "This one's got a deadline breathing down its neck — do it before it bites.",
+    "Blink-and-you'll-miss-it window. Get it done now.",
+    "The kind of task that haunts you if you don't do it first.",
+    "Quick, before you forget. It'll bug you all day otherwise.",
+    "The sooner this is gone, the freer you are.",
+    "Two minutes max. Clock is literally ticking.",
+  ],
+  easy: [
+    "There's something genuinely curious about this one — worth a look.",
+    "New territory. Your brain will actually enjoy this.",
+    "Different from your usual — that's what makes it interesting.",
+    "Low stakes, high novelty. A fun little detour.",
+    "Scratch the curiosity itch on this one.",
+    "The 'I wonder how this works' kind of task.",
+  ],
+  feelsgood: [
+    "You won't feel it now, but the version of you at 9pm will be grateful.",
+    "The relief after this one is real. Worth it.",
+    "Imagine checking this off. That feeling is waiting for you.",
+    "Future-you is rooting for you to do this one.",
+    "The kind of task that makes the rest of the day lighter.",
+    "This is the one where done feels actually satisfying.",
+  ],
+  fun: [
+    "This is your zone. The interesting part of the day.",
+    "A problem worth solving. You're good at this.",
+    "The one that'll actually engage you. Lean in.",
+    "The dopamine hit is built right in. Go get it.",
+    "This is the interesting part — the kind of work you actually like.",
+    "Your expertise, your challenge. Time to shine.",
+  ],
+};
+
+const METAPHOR_STEPS: Record<DopamineTier, string[]> = {
+  tiny:      ['the first grab', 'a quick snip', 'the fast pass', 'a single scoop', 'the quick-fire move'],
+  easy:      ['the interesting layer', 'a new twist', 'something to taste', 'the experimental step', 'worth exploring'],
+  feelsgood: ['the prep that pays off', 'setting the stage', 'the foundation layer', 'the slow simmer', 'future-you approved'],
+  fun:       ['your signature move', 'the creative part', 'the challenge level', 'where you shine', 'the interesting problem'],
+};
+
+const STUCK_OPTIONS: Record<DopamineTier, [string, string, string]> = {
+  tiny: [
+    'Set a 2-minute timer and start before it rings.',
+    "Just open it — don't do anything yet, just look.",
+    'Tell yourself: one click, one tap, one word. That\'s it.',
+  ],
+  easy: [
+    'Pick the most unusual part and start there.',
+    "Pretend you're explaining it to someone curious — begin with that.",
+    "Approach it like you've never done this before. What's interesting?",
+  ],
+  feelsgood: [
+    'Imagine how it feels when this is done — write that feeling down first.',
+    'Do just enough to see the shape of "done."',
+    'Start with the part that future-you will most appreciate.',
+  ],
+  fun: [
+    'Start with the most challenging part — the rest gets easier.',
+    'What would make this genuinely interesting to you right now?',
+    'Treat it like a puzzle and find the first piece that fits.',
+  ],
+};
+
+const assignTier = (title: string, index: number): DopamineTier => {
+  const lower = title.toLowerCase();
+  const TIERS: DopamineTier[] = ['tiny', 'easy', 'feelsgood', 'fun'];
+  if (/email|check|call|text|message|reply|confirm|ping|dm/.test(lower)) return 'tiny';
+  if (/research|explore|browse|try|test|learn|read|look into|find/.test(lower)) return 'easy';
+  if (/organize|clean|plan|prepare|schedule|set up|arrange|sort|write|draft/.test(lower)) return 'feelsgood';
+  if (/build|create|design|code|develop|draw|make|work on|implement/.test(lower)) return 'fun';
+  return TIERS[index % 4];
+};
+
+const buildDopaminePlan = (
+  activeTasks: { id: string; title: string; skipped?: boolean }[],
+  metIdx: number,
+  today: string
+): DopaminePlan => {
+  const metaphor = METAPHORS[metIdx % METAPHORS.length];
+  const nonSkipped = activeTasks.filter(t => !t.skipped);
+  const tierCounts: Record<DopamineTier, number> = { tiny: 0, easy: 0, feelsgood: 0, fun: 0 };
+  const planTasks: DopamineTaskData[] = nonSkipped.map((task, index) => {
+    const tier = assignTier(task.title, index);
+    const flavorIdx = tierCounts[tier]++;
+    return {
+      id: task.id,
+      tier,
+      flavorText: FLAVOR_TEXT[tier][flavorIdx % FLAVOR_TEXT[tier].length],
+      metaphorStep: METAPHOR_STEPS[tier][flavorIdx % METAPHOR_STEPS[tier].length],
+    };
+  });
+  return { metaphor, tasks: planTasks, generatedDate: today, metaphorIndex: metIdx };
+};
+
 const getTimeSection = (): TimeSection => {
   const hour = new Date().getHours();
   if (hour >= 5 && hour < 12) return 'morning';
@@ -387,6 +685,7 @@ function FriendItem({ uid, onRemove, onView, getEmail }: { uid: string; onRemove
 
 export default function DailyNine() {
   const [view, setView] = useState<'home' | 'today' | 'history' | 'settings' | 'friend' | 'leaderboard'>('home');
+  const [dopamineMode, setDopamineMode] = useState(false);
   const [homeSection, setHomeSection] = useState<HomeSection>('structure');
   const [autoTimeSection, setAutoTimeSection] = useState<TimeSection>(getTimeSection());
   const [manualOverride, setManualOverride] = useState<TimeSection | null>(null);
@@ -485,6 +784,9 @@ const getLocalWeekAgo = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const [dopaminePlan, setDopaminePlan] = useState<DopaminePlan | null>(null);
+  const [stuckTaskId, setStuckTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     latestStateRef.current = {
@@ -1386,6 +1688,7 @@ const addRoutineTasks = (routineType: 'morning' | 'night') => {
       void saveNow();
     }
     setView(newView);
+    setDopamineMode(false);
     if (newView === 'home') {
       transitionToSection(homeSection);
     } else if (newView === 'today') {
@@ -1467,6 +1770,85 @@ useEffect(() => {
     t.id === id ? { ...t, skipped: !t.skipped, completed: false } : t
   ));
 };
+
+  const saveDopaminePlan = useCallback(async (plan: DopaminePlan) => {
+    if (!user) return;
+    const today = getLocalDateString();
+    try {
+      const entryRef = doc(db, 'users', user.uid, 'entries', today);
+      await setDoc(entryRef, { dopaminePlan: plan }, { merge: true });
+    } catch (err) {
+      console.error('failed to save dopamine plan:', err);
+    }
+  }, [user]);
+
+  const loadDopaminePlan = useCallback(async () => {
+    if (!user) return;
+    const today = getLocalDateString();
+    try {
+      const entryRef = doc(db, 'users', user.uid, 'entries', today);
+      const entrySnap = await getDoc(entryRef);
+      if (entrySnap.exists()) {
+        const data = entrySnap.data();
+        if (data.dopaminePlan && data.dopaminePlan.generatedDate === today && data.dopaminePlan.metaphor?.buildSteps) {
+          setDopaminePlan(data.dopaminePlan as DopaminePlan);
+          return;
+        }
+      }
+    } catch (err) {
+      console.error('failed to load dopamine plan:', err);
+    }
+    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
+    const plan = buildDopaminePlan(tasks, dayOfYear, today);
+    setDopaminePlan(plan);
+    void saveDopaminePlan(plan);
+  }, [user, tasks, saveDopaminePlan]);
+
+  const shuffleMetaphor = useCallback(() => {
+    if (!dopaminePlan) return;
+    const nextIdx = (dopaminePlan.metaphorIndex + 1) % METAPHORS.length;
+    const today = getLocalDateString();
+    const newPlan = buildDopaminePlan(tasks, nextIdx, today);
+    const tierMap = new Map(dopaminePlan.tasks.map(t => [t.id, t.tier]));
+    const newPlanWithTiers = {
+      ...newPlan,
+      tasks: newPlan.tasks.map(t => ({ ...t, tier: tierMap.get(t.id) ?? t.tier })),
+    };
+    setDopaminePlan(newPlanWithTiers);
+    void saveDopaminePlan(newPlanWithTiers);
+  }, [dopaminePlan, tasks, saveDopaminePlan]);
+
+  const updateTaskTier = useCallback((taskId: string, newTier: DopamineTier) => {
+    if (!dopaminePlan) return;
+    const updatedPlan = {
+      ...dopaminePlan,
+      tasks: dopaminePlan.tasks.map(t => t.id === taskId ? { ...t, tier: newTier } : t),
+    };
+    setDopaminePlan(updatedPlan);
+    void saveDopaminePlan(updatedPlan);
+  }, [dopaminePlan, saveDopaminePlan]);
+
+  useEffect(() => {
+    if (!dopaminePlan || !user) return;
+    const plannedIds = new Set(dopaminePlan.tasks.map(t => t.id));
+    const newTasks = tasks.filter(t => !t.skipped && !plannedIds.has(t.id));
+    if (newTasks.length === 0) return;
+    const tierCounts: Record<DopamineTier, number> = { tiny: 0, easy: 0, feelsgood: 0, fun: 0 };
+    dopaminePlan.tasks.forEach(t => tierCounts[t.tier]++);
+    const newPlanTasks: DopamineTaskData[] = newTasks.map((task, i) => {
+      const tier = assignTier(task.title, dopaminePlan.tasks.length + i);
+      const flavorIdx = tierCounts[tier]++;
+      return {
+        id: task.id,
+        tier,
+        flavorText: FLAVOR_TEXT[tier][flavorIdx % FLAVOR_TEXT[tier].length],
+        metaphorStep: METAPHOR_STEPS[tier][flavorIdx % METAPHOR_STEPS[tier].length],
+      };
+    });
+    const updatedPlan = { ...dopaminePlan, tasks: [...dopaminePlan.tasks, ...newPlanTasks] };
+    setDopaminePlan(updatedPlan);
+    void saveDopaminePlan(updatedPlan);
+  }, [tasks, dopaminePlan, user, saveDopaminePlan]);
 
   const cx = 100, cy = 100, radius = 80;
 
@@ -1983,7 +2365,7 @@ useEffect(() => {
               </div>
             )}
 
-            {view === 'today' && user && (
+            {view === 'today' && user && !dopamineMode && (
               <div style={{
                 background: 'rgba(255,255,255,0.9)',
                 backdropFilter: 'blur(15px) saturate(140%)',
@@ -2020,6 +2402,20 @@ useEffect(() => {
               color: '#0f172a'
             }}>
             plan tomorrow
+          </button>
+          <button
+            onClick={() => { setDopamineMode(true); void loadDopaminePlan(); }}
+            style={{
+              padding: '0.5rem 0.75rem',
+              background: 'rgba(124,58,237,0.08)',
+              border: '1px solid rgba(124,58,237,0.2)',
+              borderRadius: '6px',
+              fontSize: '0.75rem',
+              cursor: 'pointer',
+              color: '#7c3aed',
+              marginLeft: 'auto',
+            }}>
+            ✨ dopamine mode
           </button>
         </>
       ) : (
@@ -2143,6 +2539,225 @@ useEffect(() => {
                 )}
               </div>
             )}
+
+          {view === 'today' && user && dopamineMode && (
+            <div style={{
+              background: 'rgba(255,255,255,0.95)',
+              backdropFilter: 'blur(15px) saturate(140%)',
+              borderRadius: '16px',
+              padding: '1.5rem',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.25),0 6px 20px rgba(0,0,0,0.25)',
+              width: '100%',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+                <button
+                  onClick={() => setDopamineMode(false)}
+                  style={{ background: 'none', border: 'none', color: '#7c3aed', cursor: 'pointer', fontSize: '0.85rem', padding: 0 }}
+                >
+                  ← today
+                </button>
+                {dopaminePlan && (
+                  <button
+                    onClick={shuffleMetaphor}
+                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '0.75rem', padding: 0 }}
+                  >
+                    ↺ new theme
+                  </button>
+                )}
+              </div>
+
+              {!dopaminePlan ? (
+                <div style={{ textAlign: 'center', padding: '3rem 0', color: '#64748b' }}>
+                  <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>✨</div>
+                  <p style={{ fontSize: '0.9rem', margin: 0 }}>building your dopamine menu...</p>
+                </div>
+              ) : (
+                <>
+                  {(() => {
+                    const nonSkipped = tasks.filter(t => !t.skipped);
+                    const doneCount = nonSkipped.filter(t => t.completed).length;
+                    const total = nonSkipped.length;
+                    const steps = dopaminePlan.metaphor.buildSteps ?? [];
+                    const filledSteps = total === 0 ? 0
+                      : doneCount === total
+                        ? steps.length
+                        : Math.min(steps.length - 1, Math.floor((doneCount / total) * steps.length));
+                    return (
+                      <div style={{
+                        background: 'linear-gradient(135deg, rgba(124,58,237,0.08), rgba(219,39,119,0.08))',
+                        border: '1px solid rgba(124,58,237,0.15)',
+                        borderRadius: '12px',
+                        padding: '1rem 1.25rem',
+                        marginBottom: '1.5rem',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                          <span style={{ fontSize: '1.1rem' }}>{dopaminePlan.metaphor.emoji}</span>
+                          <span style={{ fontWeight: 700, color: '#1e293b', fontSize: '0.95rem' }}>
+                            {dopaminePlan.metaphor.project}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginBottom: '0.75rem' }}>
+                          {steps.map((step, i) => {
+                            const filled = i < filledSteps;
+                            return (
+                              <div key={i} style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                opacity: filled ? 1 : 0.22,
+                                transition: 'opacity 0.4s ease',
+                              }}>
+                                <span style={{ fontSize: '0.85rem', width: '1.2rem', textAlign: 'center', flexShrink: 0 }}>
+                                  {step.emoji}
+                                </span>
+                                <span style={{
+                                  fontSize: '0.78rem',
+                                  color: filled ? '#1e293b' : '#94a3b8',
+                                  fontWeight: filled ? 500 : 400,
+                                  flex: 1,
+                                }}>
+                                  {step.label}
+                                </span>
+                                {filled && (
+                                  <span style={{ fontSize: '0.65rem', color: '#16a34a', flexShrink: 0 }}>✓</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                          {doneCount} of {total} done
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {(['tiny', 'easy', 'feelsgood', 'fun'] as DopamineTier[]).map(tier => {
+                    const config = TIER_CONFIG[tier];
+                    const tierTasks = dopaminePlan.tasks
+                      .filter(dt => dt.tier === tier)
+                      .map(dt => ({ dt, task: tasks.find(t => t.id === dt.id) }))
+                      .filter((x): x is { dt: DopamineTaskData; task: typeof tasks[number] } => !!x.task && !x.task.skipped);
+
+                    if (tierTasks.length === 0) return null;
+
+                    return (
+                      <div key={tier} style={{ marginBottom: '1.25rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginBottom: '0.5rem' }}>
+                          <span style={{ fontSize: '1rem' }}>{config.emoji}</span>
+                          <span style={{ fontWeight: 700, color: config.color, fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                            {config.label}
+                          </span>
+                          <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>— {config.tagline}</span>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {tierTasks.map(({ dt, task }) => (
+                            <div
+                              key={task.id}
+                              style={{
+                                background: task.completed ? 'rgba(0,0,0,0.02)' : config.bg,
+                                border: `1px solid ${task.completed ? 'rgba(0,0,0,0.05)' : config.border}`,
+                                borderRadius: '10px',
+                                padding: '0.875rem',
+                                opacity: task.completed ? 0.55 : 1,
+                                transition: 'all 0.2s',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                                <button
+                                  onClick={() => toggleTask(task.id)}
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, flexShrink: 0, marginTop: '1px' }}
+                                >
+                                  {task.completed
+                                    ? <CheckCircle2 size={20} style={{ color: config.color }} />
+                                    : <Circle size={20} style={{ color: config.color, opacity: 0.6 }} />
+                                  }
+                                </button>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{
+                                    fontWeight: 600,
+                                    color: '#0f172a',
+                                    fontSize: '0.88rem',
+                                    textDecoration: task.completed ? 'line-through' : 'none',
+                                    marginBottom: '0.2rem',
+                                  }}>
+                                    {task.title}
+                                  </div>
+                                  <div style={{ color: '#475569', fontSize: '0.78rem', marginBottom: '0.2rem', lineHeight: 1.45 }}>
+                                    {dt.flavorText}
+                                  </div>
+                                  <div style={{ color: config.color, fontSize: '0.72rem', opacity: 0.75 }}>
+                                    {dopaminePlan.metaphor.emoji} {dt.metaphorStep}
+                                  </div>
+                                  {!task.completed && (
+                                    <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                                      {(['tiny', 'easy', 'feelsgood', 'fun'] as DopamineTier[]).filter(t => t !== tier).map(t => (
+                                        <button
+                                          key={t}
+                                          onClick={() => updateTaskTier(task.id, t)}
+                                          title={`move to ${TIER_CONFIG[t].label}`}
+                                          style={{
+                                            background: 'none',
+                                            border: `1px solid ${TIER_CONFIG[t].border}`,
+                                            borderRadius: '4px',
+                                            padding: '1px 5px',
+                                            fontSize: '0.65rem',
+                                            color: TIER_CONFIG[t].color,
+                                            cursor: 'pointer',
+                                            lineHeight: 1.4,
+                                          }}
+                                        >
+                                          {TIER_CONFIG[t].emoji}
+                                        </button>
+                                      ))}
+                                      <button
+                                        onClick={() => setStuckTaskId(task.id)}
+                                        style={{
+                                          marginLeft: 'auto',
+                                          background: 'none',
+                                          border: '1px solid rgba(0,0,0,0.1)',
+                                          borderRadius: '4px',
+                                          padding: '1px 8px',
+                                          fontSize: '0.7rem',
+                                          color: '#64748b',
+                                          cursor: 'pointer',
+                                          lineHeight: 1.4,
+                                        }}
+                                      >
+                                        stuck? 🤔
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+
+                  {tasks.filter(t => !t.skipped).length > 0 && tasks.filter(t => !t.skipped).every(t => t.completed) && (
+                    <div style={{
+                      marginTop: '1.5rem',
+                      textAlign: 'center',
+                      padding: '1.25rem',
+                      background: 'linear-gradient(135deg, rgba(124,58,237,0.08), rgba(219,39,119,0.08))',
+                      borderRadius: '12px',
+                      border: '1px solid rgba(124,58,237,0.15)',
+                    }}>
+                      <div style={{ fontSize: '1.75rem', marginBottom: '0.35rem' }}>{dopaminePlan.metaphor.emoji}</div>
+                      <div style={{ fontWeight: 700, color: '#1e293b', fontSize: '0.95rem' }}>
+                        {dopaminePlan.metaphor.completionMessage}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {view === 'history' && (
             <div style={{
@@ -2802,6 +3417,81 @@ useEffect(() => {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {stuckTaskId && (
+            <div
+              onClick={() => setStuckTaskId(null)}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(0,0,0,0.5)',
+                backdropFilter: 'blur(8px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000,
+                padding: '1rem',
+              }}
+            >
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{
+                  background: 'white',
+                  borderRadius: '16px',
+                  padding: '1.5rem',
+                  maxWidth: '360px',
+                  width: '100%',
+                  boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+                }}
+              >
+                <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '0.25rem', fontSize: '0.95rem' }}>
+                  you're stuck on:
+                </div>
+                <div style={{ color: '#475569', fontSize: '0.85rem', marginBottom: '1.25rem', fontStyle: 'italic' }}>
+                  "{tasks.find(t => t.id === stuckTaskId)?.title}"
+                </div>
+                <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                  pick your first micro-move:
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {STUCK_OPTIONS[dopaminePlan?.tasks.find(t => t.id === stuckTaskId)?.tier ?? 'tiny'].map((option, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setStuckTaskId(null)}
+                      style={{
+                        background: 'rgba(124,58,237,0.06)',
+                        border: '1px solid rgba(124,58,237,0.2)',
+                        borderRadius: '10px',
+                        padding: '0.875rem',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        color: '#1e293b',
+                        fontSize: '0.85rem',
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => setStuckTaskId(null)}
+                  style={{
+                    marginTop: '1rem',
+                    width: '100%',
+                    background: 'none',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                    padding: '0.5rem',
+                  }}
+                >
+                  never mind
+                </button>
+              </div>
             </div>
           )}
 
