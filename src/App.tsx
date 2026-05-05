@@ -2547,7 +2547,6 @@ useEffect(() => {
               borderRadius: '16px',
               padding: '1.5rem',
               boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.25),0 6px 20px rgba(0,0,0,0.25)',
-              width: '100%',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
                 <button
