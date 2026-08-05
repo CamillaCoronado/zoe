@@ -1,19 +1,130 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, RefreshCw, Users } from 'lucide-react';
+import { CheckCircle2, Circle, Plus, Calendar, Settings, LogOut, Sun, TrendingUp, Trophy, Layers, RefreshCw, Users, Clock } from 'lucide-react';
 import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged, getRedirectResult } from 'firebase/auth';
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, query, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, deleteField, serverTimestamp, collection, query, getDocs } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebaseConfig';
 import type { User } from 'firebase/auth';
 import confetti from 'canvas-confetti';
 import { DndContext, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { WheelPicker, WheelPickerWrapper } from '@ncdai/react-wheel-picker';
+import { pickLine, CHARACTER_DISPLAY_NAME } from './characterLines';
 
-function SortableTask({ task, onToggle, onDelete, onSkip }: { 
-  task: { id: string; title: string; completed: boolean; routineType: string | null; skipped?: boolean };
+interface Task {
+  id: string;
+  title: string;
+  completed: boolean;
+  routineType: string | null;
+  skipped?: boolean;
+  remindAt?: string;        // "HH:MM" 24h local time
+  remindersSent?: number;   // 0 = none, 1 = initial sent, 2 = nag1 sent, 3 = nag2 sent
+  remindAuto?: boolean;     // true = jarvis picked the time; false = user cleared it, leave it alone
+}
+
+// "15:30" → "3:30p"
+const formatRemindAt = (hhmm: string): string => {
+  const [h, m] = hhmm.split(':').map(Number);
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, '0')}${h >= 12 ? 'p' : 'a'}`;
+};
+
+// web push support + iOS standalone detection. push on iOS only works from a
+// home-screen install (apple platform restriction), never a plain safari tab.
+const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isStandalone = () =>
+  window.matchMedia('(display-mode: standalone)').matches ||
+  (window.navigator as { standalone?: boolean }).standalone === true;
+
+const urlBase64ToUint8Array = (base64String: string) => {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+};
+
+const subscribeToPush = async (): Promise<PushSubscription> => {
+  const registration = await navigator.serviceWorker.ready;
+  return registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(import.meta.env.VITE_VAPID_PUBLIC_KEY as string),
+  });
+};
+
+// jarvis auto-scheduling: assign times to tasks that lack one. morning routine
+// anchors at 8:30a, regular tasks spread across 10a–8p, night routine at 9p.
+// never schedules in the past, keeps >=20 min between reminders so nags don't pile up.
+const AUTO_GAP_MIN = 20;
+const roundUp5 = (min: number) => Math.ceil(min / 5) * 5;
+const minutesToHHMM = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+// busy: [startMin, endMin] blocks (e.g. calendar events) that reminders must not land in
+const computeAutoTimes = (tasks: Task[], forToday: boolean, busy: [number, number][] = []): Record<string, string> => {
+  const candidates = tasks.filter(t =>
+    !t.completed && !t.skipped && !t.remindAt && t.remindAuto !== false && t.title.trim()
+  );
+  if (!candidates.length) return {};
+
+  const now = new Date();
+  const earliest = forToday ? roundUp5(now.getHours() * 60 + now.getMinutes() + 15) : 0;
+  const lastSlot = 23 * 60 + 55;
+  const taken = tasks
+    .filter(t => t.remindAt && !t.completed && !t.skipped)
+    .map(t => { const [h, m] = t.remindAt!.split(':').map(Number); return h * 60 + m; });
+
+  const morning = candidates.filter(t => t.routineType === 'morning');
+  const regular = candidates.filter(t => !t.routineType);
+  const night = candidates.filter(t => t.routineType === 'night');
+
+  const times: Record<string, string> = {};
+  let cursor = 0;
+  const claim = (taskId: string, preferred: number): boolean => {
+    let slot = roundUp5(Math.max(preferred, earliest, cursor));
+    for (;;) {
+      if (slot > lastSlot) return false;
+      // never remind mid-meeting (or in the 5 min before one) — hop to just after it
+      const block = busy.find(([s, e]) => slot >= s - 5 && slot < e);
+      if (block) { slot = roundUp5(block[1] + 5); continue; }
+      if (taken.some(x => Math.abs(x - slot) < AUTO_GAP_MIN)) { slot = roundUp5(slot + AUTO_GAP_MIN); continue; }
+      break;
+    }
+    times[taskId] = minutesToHHMM(slot);
+    taken.push(slot);
+    cursor = slot + AUTO_GAP_MIN;
+    return true;
+  };
+
+  morning.forEach(t => claim(t.id, 8 * 60 + 30));
+
+  // spread regular tasks evenly across what's left of the working day
+  const dayStart = Math.max(10 * 60, earliest, cursor);
+  const dayEnd = 20 * 60;
+  const step = regular.length > 0
+    ? Math.max(AUTO_GAP_MIN, Math.floor(Math.max(0, dayEnd - dayStart) / regular.length))
+    : 0;
+  regular.forEach((t, i) => claim(t.id, dayStart + i * step));
+
+  night.forEach(t => claim(t.id, 21 * 60));
+
+  return times;
+};
+
+const HOUR_OPTIONS = Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) }));
+const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, i) => {
+  const v = String(i * 5).padStart(2, '0');
+  return { value: v, label: v };
+});
+const AMPM_OPTIONS = [{ value: 'am', label: 'am' }, { value: 'pm', label: 'pm' }];
+
+function SortableTask({ task, onToggle, onDelete, onSkip, onReminder }: {
+  task: Task;
   onToggle: () => void;
   onDelete?: () => void;
   onSkip?: () => void;
+  onReminder?: () => void;
 }) {
   const {
     attributes,
@@ -79,6 +190,24 @@ function SortableTask({ task, onToggle, onDelete, onSkip }: {
             </span>
           )}
         </span>
+        {onReminder && (
+          <button
+            onClick={onReminder}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.2rem',
+              background: 'none',
+              border: 'none',
+              color: task.remindAt ? '#3b82f6' : '#cbd5e1',
+              cursor: 'pointer',
+              fontSize: '0.7rem',
+              padding: '0.25rem'
+            }}>
+            <Clock size={14} />
+            {task.remindAt && formatRemindAt(task.remindAt)}
+          </button>
+        )}
         {onSkip && (
           <button
             onClick={onSkip}
@@ -691,7 +820,7 @@ export default function DailyNine() {
   const [manualOverride, setManualOverride] = useState<TimeSection | null>(null);
   const [layers, setLayers] = useState<{ id: string; bg: string; section: TimeSection | HomeSection; ready: boolean }[]>([]);
   const [contentVisible, setContentVisible] = useState<boolean>(true);
-  const [tasks, setTasks] = useState<{ id: string; title: string; completed: boolean; routineType: string | null; skipped?: boolean }[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [newTask, setNewTask] = useState('');
   const [morningRoutine, setMorningRoutine] = useState<string[]>([]);
   const [nightRoutine, setNightRoutine] = useState<string[]>([]);
@@ -787,6 +916,27 @@ const getLocalWeekAgo = () => {
 
   const [dopaminePlan, setDopaminePlan] = useState<DopaminePlan | null>(null);
   const [stuckTaskId, setStuckTaskId] = useState<string | null>(null);
+
+  // reminders
+  const [reminderPickerTaskId, setReminderPickerTaskId] = useState<string | null>(null);
+  const [pickerHour, setPickerHour] = useState('9');
+  const [pickerMinute, setPickerMinute] = useState('00');
+  const [pickerAmPm, setPickerAmPm] = useState('am');
+  const [praiseLine, setPraiseLine] = useState<string | null>(null);
+  const praiseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [remindersEnabled, setRemindersEnabled] = useState(false);
+  const [autoSchedule, setAutoSchedule] = useState(true);
+  const [reminderBusy, setReminderBusy] = useState(false);
+  const [reminderError, setReminderError] = useState<string | null>(null);
+  const [calendarConnected, setCalendarConnected] = useState(false);
+  const [busyBlocks, setBusyBlocks] = useState<[number, number][] | null>(null);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+
+  const showCharacterLine = (line: string) => {
+    if (praiseTimeoutRef.current) clearTimeout(praiseTimeoutRef.current);
+    setPraiseLine(line);
+    praiseTimeoutRef.current = setTimeout(() => setPraiseLine(null), 4500);
+  };
 
   useEffect(() => {
     latestStateRef.current = {
@@ -964,6 +1114,9 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
     setManualOverride(data.manualOverride || null);
     setMorningRoutine(data.morningRoutine || []);
     setNightRoutine(data.nightRoutine || []);
+    setRemindersEnabled(data.remindersEnabled === true);
+    setAutoSchedule(data.autoSchedule !== false);
+    setCalendarConnected(!!data.googleCalendar);
     
     // sync routine tasks with settings
     const morning = data.morningRoutine || [];
@@ -1066,7 +1219,8 @@ const checkRollover = async (uid: string) => {
         ...t,
         id: Date.now().toString() + Math.random().toString(36).slice(2, 11),
         routineType: null,
-        completed: false
+        completed: false,
+        remindersSent: 0
       }));
 
     console.log('[ROLLOVER] rolling', rolled.length, 'tasks');
@@ -1129,7 +1283,8 @@ const manualRollover = async () => {
         ...t,
         id: Date.now().toString() + Math.random().toString(36).slice(2, 11),
         completed: false,
-        routineType: null
+        routineType: null,
+        remindersSent: 0
       }));
     
     if (!rolled.length) {
@@ -1308,6 +1463,102 @@ useEffect(() => {
   if (autoTimeSection === 'morning') addRoutineTasks('morning');
   if (autoTimeSection === 'night') addRoutineTasks('night');
 }, [autoTimeSection, user]);
+
+// iOS silently expires push subscriptions — on every app open, if reminders are
+// enabled, re-check the subscription and resubscribe + persist if it's gone/changed
+useEffect(() => {
+  if (!user || !pushSupported) return;
+  const refreshSubscription = async () => {
+    const userSnap = await getDoc(doc(db, 'users', user.uid));
+    if (!userSnap.exists() || userSnap.data().remindersEnabled !== true) return;
+    if (Notification.permission !== 'granted') return;
+    const registration = await navigator.serviceWorker.ready;
+    let sub = await registration.pushManager.getSubscription();
+    if (!sub) sub = await subscribeToPush();
+    if (userSnap.data().pushSubscription?.endpoint !== sub.endpoint) {
+      await updateDoc(doc(db, 'users', user.uid), {
+        pushSubscription: JSON.parse(JSON.stringify(sub)),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      });
+    }
+  };
+  refreshSubscription().catch(err => console.error('push subscription refresh failed:', err));
+}, [user]);
+
+// after the google oauth redirect: /?calendar=connected|error
+useEffect(() => {
+  const status = new URLSearchParams(window.location.search).get('calendar');
+  if (!status) return;
+  window.history.replaceState({}, '', '/');
+  if (status === 'connected') {
+    setCalendarConnected(true);
+    showCharacterLine(pickLine('jarvis', 'calendar', ''));
+  } else {
+    showCharacterLine('the calendar connection did not complete. we may attempt it again at your leisure.');
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+// fetch busy blocks for the day being edited so jarvis can schedule around them.
+// null = still loading (scheduler waits); [] = none / unavailable (scheduler proceeds).
+useEffect(() => {
+  if (!user) return;
+  const today = getLocalDateString();
+  if (!calendarConnected || editingDate < today) { setBusyBlocks([]); return; }
+  setBusyBlocks(null);
+  let cancelled = false;
+  const load = async () => {
+    try {
+      const idToken = await user.getIdToken();
+      const dayStart = new Date(editingDate + 'T00:00:00');
+      const dayEnd = new Date(editingDate + 'T00:00:00');
+      dayEnd.setDate(dayEnd.getDate() + 1);
+      const resp = await fetch('/api/calendar-busy', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ timeMin: dayStart.toISOString(), timeMax: dayEnd.toISOString() })
+      });
+      if (!resp.ok) throw new Error(`calendar-busy ${resp.status}`);
+      const data = await resp.json();
+      if (cancelled) return;
+      if (data.disconnected) {
+        setCalendarConnected(false);
+        setBusyBlocks([]);
+        return;
+      }
+      const toMin = (d: Date) => d <= dayStart ? 0 : d >= dayEnd ? 24 * 60 : d.getHours() * 60 + d.getMinutes();
+      const blocks = (data.busy || [])
+        .map((b: { start: string; end: string }) =>
+          [toMin(new Date(b.start)), toMin(new Date(b.end))] as [number, number])
+        .filter(([s, e]: [number, number]) => e > s);
+      setBusyBlocks(blocks);
+    } catch (err) {
+      console.error('calendar busy fetch failed:', err);
+      if (!cancelled) setBusyBlocks([]); // schedule without the calendar rather than not at all
+    }
+  };
+  void load();
+  return () => { cancelled = true; };
+}, [user, calendarConnected, editingDate]);
+
+// jarvis sets his own reminders: any task without a time gets one assigned
+// automatically (today or a planned future day, never past dates). manual picks
+// and user-cleared reminders (remindAuto === false) are left alone. runs even
+// before push is enabled — times show in the UI; delivery just needs the subscription.
+useEffect(() => {
+  if (!user || loading || !autoSchedule) return;
+  if (calendarConnected && busyBlocks === null) return; // wait for calendar before placing times
+  const today = getLocalDateString();
+  if (editingDate < today) return;
+  const assignments = computeAutoTimes(tasks, editingDate === today, busyBlocks ?? []);
+  const count = Object.keys(assignments).length;
+  if (count === 0) return;
+  setTasks(prev => prev.map(t =>
+    assignments[t.id] ? { ...t, remindAt: assignments[t.id], remindAuto: true, remindersSent: 0 } : t
+  ));
+  showCharacterLine(pickLine('jarvis', 'schedule', count === 1 ? '1 task' : `${count} tasks`));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [tasks, user, loading, autoSchedule, editingDate, calendarConnected, busyBlocks]);
 
 const loadEntries = async () => {
   if (!user) return;
@@ -1756,9 +2007,135 @@ useEffect(() => {
 
 
   const toggleTask = (id: string) => {
+    const task = tasks.find(t => t.id === id);
+    if (task && !task.completed && task.remindAt) {
+      // completing a reminded task: in-app praise from the character
+      showCharacterLine(pickLine('jarvis', 'praise', task.title));
+    }
     setTasks(tasks.map(t =>
       t.id === id ? { ...t, completed: !t.completed } : t
     ));
+  };
+
+  const openReminderPicker = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    let h: number, m: number;
+    if (task.remindAt) {
+      [h, m] = task.remindAt.split(':').map(Number);
+    } else {
+      const now = new Date();
+      h = now.getHours();
+      m = Math.ceil(now.getMinutes() / 5) * 5;
+      if (m === 60) { m = 0; h = (h + 1) % 24; }
+    }
+    setPickerAmPm(h >= 12 ? 'pm' : 'am');
+    setPickerHour(String(h % 12 === 0 ? 12 : h % 12));
+    setPickerMinute(String(m).padStart(2, '0'));
+    setReminderPickerTaskId(taskId);
+  };
+
+  const saveReminder = () => {
+    if (!reminderPickerTaskId) return;
+    let h = parseInt(pickerHour, 10) % 12;
+    if (pickerAmPm === 'pm') h += 12;
+    const remindAt = `${String(h).padStart(2, '0')}:${pickerMinute}`;
+    // a hand-picked time always resets the escalation counter and overrides jarvis
+    setTasks(prev => prev.map(t => {
+      if (t.id !== reminderPickerTaskId) return t;
+      const { remindAuto: _remindAuto, ...rest } = t;
+      return { ...rest, remindAt, remindersSent: 0 };
+    }));
+    setReminderPickerTaskId(null);
+  };
+
+  const clearReminder = () => {
+    if (!reminderPickerTaskId) return;
+    // remindAuto: false = the user cleared it on purpose; jarvis won't reschedule it
+    setTasks(prev => prev.map(t => {
+      if (t.id !== reminderPickerTaskId) return t;
+      const { remindAt: _remindAt, remindersSent: _remindersSent, ...rest } = t;
+      return { ...rest, remindAuto: false };
+    }));
+    setReminderPickerTaskId(null);
+  };
+
+  const enableReminders = async () => {
+    if (!user) return;
+    setReminderBusy(true);
+    setReminderError(null);
+    try {
+      // iOS requires this to run inside a user gesture — only called from the settings button
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setReminderError('notifications are blocked for zoe. allow them in your device settings, then try again.');
+        return;
+      }
+      const sub = await subscribeToPush();
+      await updateDoc(doc(db, 'users', user.uid), {
+        pushSubscription: JSON.parse(JSON.stringify(sub)),
+        remindersEnabled: true,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      });
+      setRemindersEnabled(true);
+    } catch (err) {
+      console.error('enable reminders failed:', err);
+      setReminderError('could not enable reminders — check your connection and try again.');
+    } finally {
+      setReminderBusy(false);
+    }
+  };
+
+  const connectCalendar = async () => {
+    if (!user) return;
+    setCalendarError(null);
+    try {
+      const idToken = await user.getIdToken();
+      const resp = await fetch('/api/calendar-auth', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${idToken}` }
+      });
+      if (!resp.ok) throw new Error(`calendar-auth ${resp.status}`);
+      const data = await resp.json();
+      window.location.href = data.url;
+    } catch (err) {
+      console.error('calendar connect failed:', err);
+      setCalendarError("couldn't start the calendar connection. note it only works on the deployed app (api routes don't run under npm run dev).");
+    }
+  };
+
+  const disconnectCalendar = async () => {
+    if (!user) return;
+    setCalendarError(null);
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { googleCalendar: deleteField() });
+      setCalendarConnected(false);
+      setBusyBlocks([]);
+    } catch (err) {
+      console.error('calendar disconnect failed:', err);
+      setCalendarError('could not disconnect — try again.');
+    }
+  };
+
+  const disableReminders = async () => {
+    if (!user) return;
+    setReminderBusy(true);
+    setReminderError(null);
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const sub = await registration.pushManager.getSubscription();
+      if (sub) await sub.unsubscribe();
+      await updateDoc(doc(db, 'users', user.uid), {
+        remindersEnabled: false,
+        pushSubscription: deleteField()
+      });
+      setRemindersEnabled(false);
+    } catch (err) {
+      console.error('disable reminders failed:', err);
+      setReminderError('could not disable reminders — try again.');
+    } finally {
+      setReminderBusy(false);
+    }
   };
 
   const deleteTask = (id: string) => {
@@ -2508,24 +2885,27 @@ useEffect(() => {
                           task={task}
                           onToggle={() => toggleTask(task.id)}
                           onSkip={() => skipTask(task.id)}
+                          onReminder={() => openReminderPicker(task.id)}
                         />
                       ))}
-                      
+
                       {tasks.filter(t => !t.routineType).map(task => (
                         <SortableTask
                           key={task.id}
                           task={task}
                           onToggle={() => toggleTask(task.id)}
                           onDelete={() => deleteTask(task.id)}
+                          onReminder={() => openReminderPicker(task.id)}
                         />
                       ))}
-                      
+
                       {tasks.filter(t => t.routineType === 'night').map(task => (
                         <SortableTask
                           key={task.id}
                           task={task}
                           onToggle={() => toggleTask(task.id)}
                           onSkip={() => skipTask(task.id)}
+                          onReminder={() => openReminderPicker(task.id)}
                         />
                       ))}
                     </div>
@@ -3334,6 +3714,150 @@ useEffect(() => {
                 )}
               </div>
 
+              <div style={{ paddingTop: '1rem', borderTop: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
+                <h3 style={{ fontWeight: 600, color: '#0f172a', marginBottom: '0.5rem', fontSize: '0.9rem' }}>reminders</h3>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.75rem',
+                  marginBottom: '0.75rem',
+                  padding: '0.625rem 0.75rem',
+                  background: 'rgba(0,0,0,0.02)',
+                  borderRadius: '8px'
+                }}>
+                  <span style={{ fontSize: '0.8rem', color: '#0f172a' }}>
+                    {CHARACTER_DISPLAY_NAME.jarvis} sets the times himself
+                  </span>
+                  <button
+                    onClick={async () => {
+                      const next = !autoSchedule;
+                      setAutoSchedule(next);
+                      if (user) {
+                        try {
+                          await updateDoc(doc(db, 'users', user.uid), { autoSchedule: next });
+                        } catch (err) {
+                          console.error('failed to save autoSchedule:', err);
+                        }
+                      }
+                    }}
+                    style={{
+                      padding: '0.25rem 0.625rem',
+                      background: autoSchedule ? '#0f172a' : 'rgba(0,0,0,0.08)',
+                      color: autoSchedule ? 'white' : '#64748b',
+                      border: 'none',
+                      borderRadius: '999px',
+                      fontSize: '0.7rem',
+                      cursor: 'pointer',
+                      flexShrink: 0
+                    }}>
+                    {autoSchedule ? 'on' : 'off'}
+                  </button>
+                </div>
+                {calendarConnected ? (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '0.75rem',
+                    marginBottom: '0.75rem',
+                    padding: '0.625rem 0.75rem',
+                    background: 'rgba(0,0,0,0.02)',
+                    borderRadius: '8px'
+                  }}>
+                    <span style={{ fontSize: '0.8rem', color: '#0f172a' }}>
+                      google calendar connected — busy times are avoided
+                    </span>
+                    <button
+                      onClick={disconnectCalendar}
+                      style={{
+                        padding: '0.25rem 0.625rem',
+                        background: 'none',
+                        color: '#ef4444',
+                        border: '1px solid rgba(239,68,68,0.3)',
+                        borderRadius: '999px',
+                        fontSize: '0.7rem',
+                        cursor: 'pointer',
+                        flexShrink: 0
+                      }}>
+                      disconnect
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={connectCalendar}
+                    style={{
+                      width: '100%',
+                      marginBottom: '0.75rem',
+                      padding: '0.625rem 0.75rem',
+                      background: 'rgba(0,0,0,0.02)',
+                      color: '#0f172a',
+                      border: '1px dashed rgba(0,0,0,0.15)',
+                      borderRadius: '8px',
+                      fontSize: '0.8rem',
+                      cursor: 'pointer',
+                      textAlign: 'left'
+                    }}>
+                    connect google calendar — {CHARACTER_DISPLAY_NAME.jarvis} will schedule around your events
+                  </button>
+                )}
+                {calendarError && (
+                  <p style={{ fontSize: '0.75rem', color: '#ef4444', marginTop: 0, marginBottom: '0.75rem' }}>
+                    {calendarError}
+                  </p>
+                )}
+                {!pushSupported ? (
+                  <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>
+                    this browser doesn't support push notifications.
+                  </p>
+                ) : isIOS && !isStandalone() ? (
+                  <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0, lineHeight: 1.5 }}>
+                    add zoe to your home screen first: share button → add to home screen.
+                    then open zoe from the home screen icon to enable reminders.
+                  </p>
+                ) : (
+                  <>
+                    <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.75rem' }}>
+                      {CHARACTER_DISPLAY_NAME.jarvis} will send a note when a task's hour arrives — and follow up, twice, if it goes unanswered.
+                    </p>
+                    <button
+                      onClick={remindersEnabled ? disableReminders : enableReminders}
+                      disabled={reminderBusy}
+                      style={{
+                        width: '100%',
+                        padding: '0.75rem',
+                        background: remindersEnabled ? 'rgba(0,0,0,0.05)' : '#0f172a',
+                        color: remindersEnabled ? '#0f172a' : 'white',
+                        border: 'none',
+                        borderRadius: '8px',
+                        fontSize: '0.85rem',
+                        cursor: reminderBusy ? 'wait' : 'pointer',
+                        opacity: reminderBusy ? 0.6 : 1
+                      }}>
+                      {reminderBusy ? 'working...' : remindersEnabled ? 'disable reminders' : 'enable reminders'}
+                    </button>
+                    {!remindersEnabled && autoSchedule && !reminderError && (
+                      <p style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem', marginBottom: 0 }}>
+                        {CHARACTER_DISPLAY_NAME.jarvis} is already assigning times to your tasks —
+                        enable reminders to have them delivered as notifications.
+                      </p>
+                    )}
+                    {remindersEnabled && !reminderError && (
+                      <p style={{ fontSize: '0.75rem', color: '#10b981', marginTop: '0.5rem', marginBottom: 0 }}>
+                        {autoSchedule
+                          ? 'reminders are on. unscheduled tasks get times automatically — the clock icon overrides.'
+                          : 'reminders are on. set a time on any task with the clock icon.'}
+                      </p>
+                    )}
+                    {reminderError && (
+                      <p style={{ fontSize: '0.75rem', color: '#ef4444', marginTop: '0.5rem', marginBottom: 0 }}>
+                        {reminderError}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+
               <div style={{ paddingTop: '1rem', borderTop: '1px solid #e2e8f0' }}>
                 <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.5rem' }}>
                   logged in as: {user?.email || 'loading...'}
@@ -3416,6 +3940,119 @@ useEffect(() => {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {reminderPickerTaskId && (
+            <div
+              onClick={() => setReminderPickerTaskId(null)}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(0,0,0,0.5)',
+                backdropFilter: 'blur(8px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000,
+                padding: '1rem',
+              }}
+            >
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{
+                  background: 'white',
+                  borderRadius: '16px',
+                  padding: '1.5rem',
+                  maxWidth: '320px',
+                  width: '100%',
+                  boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+                }}
+              >
+                <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '0.25rem', fontSize: '0.95rem' }}>
+                  remind me about:
+                </div>
+                <div style={{ color: '#475569', fontSize: '0.85rem', marginBottom: '1rem', fontStyle: 'italic' }}>
+                  "{tasks.find(t => t.id === reminderPickerTaskId)?.title}"
+                </div>
+                <div style={{ marginBottom: '1.25rem', color: '#0f172a' }}>
+                  <WheelPickerWrapper>
+                    <WheelPicker options={HOUR_OPTIONS} value={pickerHour} onValueChange={setPickerHour} infinite />
+                    <WheelPicker options={MINUTE_OPTIONS} value={pickerMinute} onValueChange={setPickerMinute} infinite />
+                    <WheelPicker options={AMPM_OPTIONS} value={pickerAmPm} onValueChange={setPickerAmPm} />
+                  </WheelPickerWrapper>
+                </div>
+                <button
+                  onClick={saveReminder}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    background: '#0f172a',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '0.9rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}>
+                  set reminder
+                </button>
+                {tasks.find(t => t.id === reminderPickerTaskId)?.remindAt && (
+                  <button
+                    onClick={clearReminder}
+                    style={{
+                      marginTop: '0.5rem',
+                      width: '100%',
+                      background: 'none',
+                      border: '1px solid rgba(239,68,68,0.3)',
+                      borderRadius: '8px',
+                      color: '#ef4444',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      padding: '0.625rem',
+                    }}>
+                    clear reminder
+                  </button>
+                )}
+                <button
+                  onClick={() => setReminderPickerTaskId(null)}
+                  style={{
+                    marginTop: '0.5rem',
+                    width: '100%',
+                    background: 'none',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                    padding: '0.5rem',
+                  }}>
+                  never mind
+                </button>
+              </div>
+            </div>
+          )}
+
+          {praiseLine && (
+            <div style={{
+              position: 'fixed',
+              bottom: '1.5rem',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'white',
+              color: '#1e293b',
+              borderRadius: '12px',
+              padding: '0.875rem 1.25rem',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+              zIndex: 1100,
+              maxWidth: '340px',
+              width: 'calc(100% - 2rem)',
+              fontSize: '0.85rem',
+              lineHeight: 1.45,
+            }}>
+              {praiseLine}
+              <div style={{ marginTop: '0.35rem', fontSize: '0.7rem', color: '#94a3b8' }}>
+                — {CHARACTER_DISPLAY_NAME.jarvis}
+              </div>
             </div>
           )}
 

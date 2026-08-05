@@ -8,5 +8,11 @@
       "source": "/__/firebase/:path*",
       "destination": "https://zoe-ab4cb.firebaseapp.com/__/firebase/:path*"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/send-reminders",
+      "schedule": "0 12 * * *"
+    }
   ]
 }
