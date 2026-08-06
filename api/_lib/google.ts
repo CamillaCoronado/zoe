@@ -3,26 +3,34 @@
 import type { VercelRequest } from '@vercel/node';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { createHmac, timingSafeEqual } from 'crypto';
 
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
 if (!getApps().length) {
-  initializeApp({
-    credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}')),
-  });
+  initializeApp({ credential: cert(serviceAccount) });
 }
 export const db = getFirestore();
-export const adminAuth = getAuth();
 
 export const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+
+// firebase ID tokens are RS256 JWTs signed by securetoken.google.com — verify
+// directly with jose instead of firebase-admin/auth (whose jwks-rsa dep does
+// require() of ESM-only jose and crashes the vercel function runtime)
+const FIREBASE_JWKS = createRemoteJWKSet(
+  new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
+);
 
 // verify the firebase ID token from an Authorization: Bearer header; returns uid or null
 export const verifyUser = async (req: VercelRequest): Promise<string | null> => {
   const header = req.headers.authorization || '';
   if (!header.startsWith('Bearer ')) return null;
   try {
-    const decoded = await adminAuth.verifyIdToken(header.slice(7));
-    return decoded.uid;
+    const { payload } = await jwtVerify(header.slice(7), FIREBASE_JWKS, {
+      issuer: `https://securetoken.google.com/${serviceAccount.project_id}`,
+      audience: serviceAccount.project_id,
+    });
+    return typeof payload.sub === 'string' && payload.sub.length > 0 ? payload.sub : null;
   } catch {
     return null;
   }
