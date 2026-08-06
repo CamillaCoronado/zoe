@@ -2,7 +2,7 @@
 // user's primary google calendar (freeBusy). the client schedules around them.
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { FieldValue } from 'firebase-admin/firestore';
-import { db, verifyUser, tokenRequest } from './_lib/google';
+import { db, verifyUser, tokenRequest } from './_lib/google.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });

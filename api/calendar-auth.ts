@@ -1,7 +1,7 @@
 // POST with a firebase ID token → returns the google consent URL to redirect to.
 // (POST + header keeps the ID token out of URLs/logs.)
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { verifyUser, signState, redirectUri, CALENDAR_SCOPE } from './_lib/google';
+import { verifyUser, signState, redirectUri, CALENDAR_SCOPE } from './_lib/google.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });

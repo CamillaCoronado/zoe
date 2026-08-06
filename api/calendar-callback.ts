@@ -1,7 +1,7 @@
 // google redirects here after consent. verifies state, exchanges the code for
 // tokens, stores the refresh token on the user doc, bounces back to the app.
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { db, verifyState, redirectUri, tokenRequest } from './_lib/google';
+import { db, verifyState, redirectUri, tokenRequest } from './_lib/google.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { code, state, error } = req.query;

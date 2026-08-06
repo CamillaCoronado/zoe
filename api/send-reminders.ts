@@ -5,8 +5,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import webpush from 'web-push';
-import { pickLine } from '../src/characterLines';
-import type { LineCategory } from '../src/characterLines';
+import { pickLine } from '../src/characterLines.js';
+import type { LineCategory } from '../src/characterLines.js';
 
 if (!getApps().length) {
   initializeApp({
