@@ -33,13 +33,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(502).json({ error: 'token refresh failed' });
   }
 
+  // which calendars count as busy — user-chosen subset, defaulting to primary
+  const selectedIds: string[] = userSnap.data()?.googleCalendar?.selectedIds?.length
+    ? userSnap.data()!.googleCalendar.selectedIds
+    : ['primary'];
+
   const fbResp = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${data.access_token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ timeMin, timeMax, items: [{ id: 'primary' }] }),
+    body: JSON.stringify({ timeMin, timeMax, items: selectedIds.map(id => ({ id })) }),
   });
   const fbData = await fbResp.json();
   if (!fbResp.ok) {
@@ -47,5 +52,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(502).json({ error: 'freeBusy failed' });
   }
 
-  return res.status(200).json({ busy: fbData.calendars?.primary?.busy || [] });
+  const busy = Object.values(fbData.calendars || {}).flatMap(
+    (c) => (c as { busy?: { start: string; end: string }[] }).busy || []
+  );
+  return res.status(200).json({ busy });
 }

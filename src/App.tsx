@@ -948,6 +948,8 @@ const getLocalWeekAgo = () => {
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [busyBlocks, setBusyBlocks] = useState<[number, number][] | null>(null);
   const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [calendarList, setCalendarList] = useState<{ id: string; summary: string; primary: boolean }[] | null>(null);
+  const [selectedCalIds, setSelectedCalIds] = useState<string[]>([]);
 
   // the bank: someday-tasks jarvis drips into days that have room
   const [taskBank, setTaskBank] = useState<{ id: string; title: string; addedAt: number }[]>([]);
@@ -1139,6 +1141,7 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
     setRemindersEnabled(data.remindersEnabled === true);
     setAutoSchedule(data.autoSchedule !== false);
     setCalendarConnected(!!data.googleCalendar);
+    setSelectedCalIds(data.googleCalendar?.selectedIds || []);
     setTaskBank(data.taskBank || []);
     bankPulledDateRef.current = data.bankPulledDate || null;
     
@@ -1523,6 +1526,29 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, []);
 
+// load the calendar list lazily when settings is open and calendar is connected,
+// so the user can choose which calendars count as busy
+useEffect(() => {
+  if (view !== 'settings' || !calendarConnected || !user || calendarList !== null) return;
+  const load = async () => {
+    try {
+      const idToken = await user.getIdToken();
+      const resp = await fetch('/api/calendar-list', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${idToken}` }
+      });
+      if (!resp.ok) throw new Error(`calendar-list ${resp.status}`);
+      const data = await resp.json();
+      if (data.disconnected) { setCalendarConnected(false); return; }
+      setCalendarList(data.calendars || []);
+    } catch (err) {
+      console.error('calendar list fetch failed:', err);
+      setCalendarList([]);
+    }
+  };
+  void load();
+}, [view, calendarConnected, user, calendarList]);
+
 // fetch busy blocks for the day being edited so jarvis can schedule around them.
 // null = still loading (scheduler waits); [] = none / unavailable (scheduler proceeds).
 useEffect(() => {
@@ -1563,7 +1589,8 @@ useEffect(() => {
   };
   void load();
   return () => { cancelled = true; };
-}, [user, calendarConnected, editingDate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [user, calendarConnected, editingDate, selectedCalIds.join('|')]);
 
 // the bank drip: once per day, on first open, if today has room (< 9 tasks),
 // jarvis pulls up to two of the oldest banked tasks into the day. they then get
@@ -2212,9 +2239,30 @@ useEffect(() => {
       await updateDoc(doc(db, 'users', user.uid), { googleCalendar: deleteField() });
       setCalendarConnected(false);
       setBusyBlocks([]);
+      setCalendarList(null);
+      setSelectedCalIds([]);
     } catch (err) {
       console.error('calendar disconnect failed:', err);
       setCalendarError('could not disconnect — try again.');
+    }
+  };
+
+  // which calendars count as busy; empty selection = primary only
+  const isCalendarSelected = (c: { id: string; primary: boolean }) =>
+    selectedCalIds.length ? selectedCalIds.includes(c.id) : c.primary;
+
+  const toggleCalendarSelected = async (id: string) => {
+    if (!user || !calendarList) return;
+    const current = selectedCalIds.length
+      ? selectedCalIds
+      : calendarList.filter(c => c.primary).map(c => c.id);
+    const next = current.includes(id) ? current.filter(x => x !== id) : [...current, id];
+    if (next.length === 0) return; // at least one calendar must stay selected
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { 'googleCalendar.selectedIds': next });
+      setSelectedCalIds(next); // busy blocks refetch via effect
+    } catch (err) {
+      console.error('failed to save calendar selection:', err);
     }
   };
 
@@ -3939,32 +3987,74 @@ useEffect(() => {
                 </div>
                 {calendarConnected ? (
                   <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '0.75rem',
                     marginBottom: '0.75rem',
                     padding: '0.625rem 0.75rem',
                     background: 'rgba(0,0,0,0.02)',
                     borderRadius: '8px'
                   }}>
-                    <span style={{ fontSize: '0.8rem', color: '#0f172a' }}>
-                      google calendar connected — busy times are avoided
-                    </span>
-                    <button
-                      onClick={disconnectCalendar}
-                      style={{
-                        padding: '0.25rem 0.625rem',
-                        background: 'none',
-                        color: '#ef4444',
-                        border: '1px solid rgba(239,68,68,0.3)',
-                        borderRadius: '999px',
-                        fontSize: '0.7rem',
-                        cursor: 'pointer',
-                        flexShrink: 0
-                      }}>
-                      disconnect
-                    </button>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '0.75rem'
+                    }}>
+                      <span style={{ fontSize: '0.8rem', color: '#0f172a' }}>
+                        google calendar connected — busy times are avoided
+                      </span>
+                      <button
+                        onClick={disconnectCalendar}
+                        style={{
+                          padding: '0.25rem 0.625rem',
+                          background: 'none',
+                          color: '#ef4444',
+                          border: '1px solid rgba(239,68,68,0.3)',
+                          borderRadius: '999px',
+                          fontSize: '0.7rem',
+                          cursor: 'pointer',
+                          flexShrink: 0
+                        }}>
+                        disconnect
+                      </button>
+                    </div>
+                    <div style={{ marginTop: '0.5rem' }}>
+                      {calendarList === null ? (
+                        <p style={{ fontSize: '0.72rem', color: '#94a3b8', margin: 0 }}>loading your calendars...</p>
+                      ) : calendarList.length === 0 ? (
+                        <p style={{ fontSize: '0.72rem', color: '#94a3b8', margin: 0 }}>
+                          couldn't load calendars — using your primary calendar.
+                        </p>
+                      ) : (
+                        <>
+                          <p style={{ fontSize: '0.72rem', color: '#94a3b8', margin: '0 0 0.35rem 0' }}>
+                            these calendars count as busy:
+                          </p>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                            {calendarList.map(c => (
+                              <label
+                                key={c.id}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.5rem',
+                                  fontSize: '0.78rem',
+                                  color: '#475569',
+                                  cursor: 'pointer'
+                                }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isCalendarSelected(c)}
+                                  onChange={() => toggleCalendarSelected(c.id)}
+                                  style={{ accentColor: '#0f172a' }}
+                                />
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {c.summary}{c.primary ? ' (primary)' : ''}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <button
