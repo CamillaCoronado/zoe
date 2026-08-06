@@ -119,12 +119,13 @@ const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, i) => {
 });
 const AMPM_OPTIONS = [{ value: 'am', label: 'am' }, { value: 'pm', label: 'pm' }];
 
-function SortableTask({ task, onToggle, onDelete, onSkip, onReminder }: {
+function SortableTask({ task, onToggle, onDelete, onSkip, onReminder, onBank }: {
   task: Task;
   onToggle: () => void;
   onDelete?: () => void;
   onSkip?: () => void;
   onReminder?: () => void;
+  onBank?: () => void;
 }) {
   const {
     attributes,
@@ -206,6 +207,22 @@ function SortableTask({ task, onToggle, onDelete, onSkip, onReminder }: {
             }}>
             <Clock size={14} />
             {task.remindAt && formatRemindAt(task.remindAt)}
+          </button>
+        )}
+        {onBank && !task.completed && (
+          <button
+            onClick={onBank}
+            title="move to the bank for another day"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#94a3b8',
+              cursor: 'pointer',
+              fontSize: '0.75rem',
+              opacity: 0.8,
+              padding: '0.25rem 0.5rem'
+            }}>
+            bank
           </button>
         )}
         {onSkip && (
@@ -2157,6 +2174,19 @@ useEffect(() => {
     saveBank(taskBank.filter(b => b.id !== id));
   };
 
+  // move a task from the day into the bank (defer without deleting)
+  const bankTask = (id: string) => {
+    const task = tasks.find(t => t.id === id);
+    if (!task) return;
+    setTasks(prev => prev.filter(t => t.id !== id));
+    saveBank([...taskBank, {
+      id: Date.now().toString() + Math.random().toString(36).slice(2),
+      title: task.title,
+      addedAt: Date.now()
+    }]);
+    showCharacterLine(pickLine('jarvis', 'deposit', task.title));
+  };
+
   const connectCalendar = async () => {
     if (!user) return;
     setCalendarError(null);
@@ -2967,6 +2997,7 @@ useEffect(() => {
                           onToggle={() => toggleTask(task.id)}
                           onDelete={() => deleteTask(task.id)}
                           onReminder={() => openReminderPicker(task.id)}
+                          onBank={() => bankTask(task.id)}
                         />
                       ))}
 
