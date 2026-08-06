@@ -932,6 +932,11 @@ const getLocalWeekAgo = () => {
   const [busyBlocks, setBusyBlocks] = useState<[number, number][] | null>(null);
   const [calendarError, setCalendarError] = useState<string | null>(null);
 
+  // the bank: someday-tasks jarvis drips into days that have room
+  const [taskBank, setTaskBank] = useState<{ id: string; title: string; addedAt: number }[]>([]);
+  const [bankInput, setBankInput] = useState('');
+  const bankPulledDateRef = useRef<string | null>(null);
+
   const showCharacterLine = (line: string) => {
     if (praiseTimeoutRef.current) clearTimeout(praiseTimeoutRef.current);
     setPraiseLine(line);
@@ -1117,6 +1122,8 @@ const loadUserData = async (uid: string, dateToLoad?: string) => {
     setRemindersEnabled(data.remindersEnabled === true);
     setAutoSchedule(data.autoSchedule !== false);
     setCalendarConnected(!!data.googleCalendar);
+    setTaskBank(data.taskBank || []);
+    bankPulledDateRef.current = data.bankPulledDate || null;
     
     // sync routine tasks with settings
     const morning = data.morningRoutine || [];
@@ -1540,6 +1547,36 @@ useEffect(() => {
   void load();
   return () => { cancelled = true; };
 }, [user, calendarConnected, editingDate]);
+
+// the bank drip: once per day, on first open, if today has room (< 9 tasks),
+// jarvis pulls up to two of the oldest banked tasks into the day. they then get
+// reminder times from the auto-scheduler like any other task.
+useEffect(() => {
+  if (!user || loading || taskBank.length === 0) return;
+  const today = getLocalDateString();
+  if (editingDate !== today) return;
+  if (bankPulledDateRef.current === today) return;
+  bankPulledDateRef.current = today; // claim immediately so strict-mode/re-renders can't double-pull
+  const capacity = Math.max(0, 9 - tasks.length);
+  const n = Math.min(2, capacity, taskBank.length);
+  if (n === 0) {
+    // full day: skip today entirely rather than dripping mid-day as tasks complete
+    void updateDoc(doc(db, 'users', user.uid), { bankPulledDate: today });
+    return;
+  }
+  const pulled = [...taskBank].sort((a, b) => a.addedAt - b.addedAt).slice(0, n);
+  setTasks(prev => [...prev, ...pulled.map(b => ({
+    id: Date.now().toString() + Math.random().toString(36).slice(2),
+    title: b.title,
+    completed: false,
+    routineType: null
+  }))]);
+  const remaining = taskBank.filter(b => !pulled.some(p => p.id === b.id));
+  setTaskBank(remaining);
+  void updateDoc(doc(db, 'users', user.uid), { taskBank: remaining, bankPulledDate: today });
+  showCharacterLine(pickLine('jarvis', 'bank', n === 1 ? pulled[0].title : `${n} tasks`));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [user, loading, taskBank, tasks, editingDate]);
 
 // jarvis sets his own reminders: any task without a time gets one assigned
 // automatically (today or a planned future day, never past dates). manual picks
@@ -2084,6 +2121,40 @@ useEffect(() => {
     } finally {
       setReminderBusy(false);
     }
+  };
+
+  const saveBank = (next: { id: string; title: string; addedAt: number }[]) => {
+    setTaskBank(next);
+    if (user) {
+      updateDoc(doc(db, 'users', user.uid), { taskBank: next })
+        .catch(err => console.error('failed to save bank:', err));
+    }
+  };
+
+  const addToBank = () => {
+    if (!bankInput.trim()) return;
+    saveBank([...taskBank, {
+      id: Date.now().toString() + Math.random().toString(36).slice(2),
+      title: bankInput.trim(),
+      addedAt: Date.now()
+    }]);
+    setBankInput('');
+  };
+
+  const removeFromBank = (id: string) => {
+    saveBank(taskBank.filter(b => b.id !== id));
+  };
+
+  const pullFromBank = (id: string) => {
+    const banked = taskBank.find(b => b.id === id);
+    if (!banked) return;
+    setTasks(prev => [...prev, {
+      id: Date.now().toString() + Math.random().toString(36).slice(2),
+      title: banked.title,
+      completed: false,
+      routineType: null
+    }]);
+    saveBank(taskBank.filter(b => b.id !== id));
   };
 
   const connectCalendar = async () => {
@@ -2917,6 +2988,87 @@ useEffect(() => {
                     no tasks yet. add one above.
                   </p>
                 )}
+
+                <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid #e2e8f0' }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                    <span style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.9rem' }}>the bank</span>
+                    <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>({taskBank.length})</span>
+                  </div>
+                  <p style={{ color: '#94a3b8', fontSize: '0.75rem', marginBottom: '0.75rem' }}>
+                    someday tasks. {CHARACTER_DISPLAY_NAME.jarvis} slips up to two into your day when there's room.
+                  </p>
+                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: taskBank.length ? '0.75rem' : 0 }}>
+                    <input
+                      type="text"
+                      value={bankInput}
+                      onChange={e => setBankInput(e.target.value)}
+                      onKeyPress={e => e.key === 'Enter' && addToBank()}
+                      placeholder="add to the bank..."
+                      style={{
+                        flex: 1,
+                        padding: '0.6rem 0.75rem',
+                        borderRadius: '8px',
+                        border: '1px solid #e2e8f0',
+                        outline: 'none',
+                        fontSize: '0.85rem',
+                        color: 'black'
+                      }}
+                    />
+                    <button
+                      onClick={addToBank}
+                      style={{
+                        padding: '0.6rem 0.875rem',
+                        background: 'rgba(0,0,0,0.05)',
+                        color: '#0f172a',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: 'pointer'
+                      }}>
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {[...taskBank].sort((a, b) => a.addedAt - b.addedAt).map(b => (
+                      <div
+                        key={b.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.75rem',
+                          padding: '0.6rem 0.75rem',
+                          borderRadius: '8px',
+                          background: 'rgba(0,0,0,0.02)'
+                        }}>
+                        <span style={{ flex: 1, color: '#0f172a', fontSize: '0.85rem' }}>{b.title}</span>
+                        <button
+                          onClick={() => pullFromBank(b.id)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#3b82f6',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            padding: '0.25rem 0.5rem'
+                          }}>
+                          {editingDate === getLocalDateString() ? 'today' : 'add'}
+                        </button>
+                        <button
+                          onClick={() => removeFromBank(b.id)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#ef4444',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            opacity: 0.6,
+                            padding: '0.25rem 0.5rem'
+                          }}>
+                          delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 

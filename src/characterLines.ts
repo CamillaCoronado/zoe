@@ -2,7 +2,7 @@
 // shared between the app (praise, in-app flourishes) and api/send-reminders.ts (push bodies).
 
 export type CharacterId = 'jarvis';
-export type LineCategory = 'reminder' | 'nag1' | 'nag2' | 'praise' | 'schedule' | 'calendar';
+export type LineCategory = 'reminder' | 'nag1' | 'nag2' | 'praise' | 'schedule' | 'calendar' | 'bank';
 export type CharacterLineBank = Record<LineCategory, string[]>;
 
 // internal id stays 'jarvis'; display name is a single constant so it can be renamed trivially
@@ -48,6 +48,15 @@ export const CHARACTER_LINES: Record<CharacterId, CharacterLineBank> = {
       "{task}, scheduled. you need only appear.",
       "the itinerary is set: {task}. my half of the arrangement is complete.",
       "i've distributed {task} at sensible intervals. sensible being, of course, my judgment.",
+    ],
+    // shown in-app when jarvis pulls tasks from the bank into the day;
+    // {task} receives a title or e.g. "2 tasks"
+    bank: [
+      "from your reserves: {task}. it has waited long enough.",
+      "i've drawn {task} from the bank. consider it an investment maturing.",
+      "{task}, retrieved from storage. the day had a vacancy.",
+      "the bank has made a withdrawal: {task}. interest was accruing.",
+      "{task} — filed under 'someday.' today, i've decided, is someday.",
     ],
     // shown in-app after google calendar is connected; no {task} slot
     calendar: [
